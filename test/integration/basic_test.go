@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/db"
+	"github.com/tjstebbing/piperdb/pkg/db"
 )
 
 func TestBasicOperations(t *testing.T) {
@@ -75,17 +75,22 @@ func TestBasicOperations(t *testing.T) {
 		assert.Equal(t, int64(2), result.TotalCount)
 		assert.Len(t, result.Items, 2)
 
-		// Check first item
-		item1 := result.Items[0]
-		assert.Equal(t, "iPhone", item1["name"])
-		assert.Equal(t, float64(999), item1["price"]) // JSON unmarshal makes numbers float64
-		assert.Equal(t, "Apple", item1["brand"])
+		// BoltDB iterates keys in byte-sorted order (UUIDs), not insertion order.
+		// Find items by name instead of assuming order.
+		itemsByName := make(map[string]map[string]interface{})
+		for _, item := range result.Items {
+			itemsByName[item["name"].(string)] = item
+		}
 
-		// Check second item
-		item2 := result.Items[1]
-		assert.Equal(t, "MacBook", item2["name"])
-		assert.Equal(t, float64(2499), item2["price"])
-		assert.Equal(t, "laptop", item2["category"])
+		iphone := itemsByName["iPhone"]
+		require.NotNil(t, iphone)
+		assert.Equal(t, float64(999), iphone["price"])
+		assert.Equal(t, "Apple", iphone["brand"])
+
+		macbook := itemsByName["MacBook"]
+		require.NotNil(t, macbook)
+		assert.Equal(t, float64(2499), macbook["price"])
+		assert.Equal(t, "laptop", macbook["category"])
 	})
 
 	t.Run("GetSchema", func(t *testing.T) {

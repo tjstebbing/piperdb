@@ -49,8 +49,8 @@ type FieldDef struct {
 	Description string      `json:"description,omitempty"`
 
 	// Statistics for inference
-	SeenInCount int64 `json:"-"`
-	TotalItems  int64 `json:"-"`
+	SeenInCount int64 `json:"seen_in_count"`
+	TotalItems  int64 `json:"total_items"`
 
 	// Type hints for UI generation
 	TypeHints []string `json:"type_hints,omitempty"`

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tjstebbing/piper/piperdb/internal/dsl"
-	"github.com/tjstebbing/piper/piperdb/internal/storage"
-	"github.com/tjstebbing/piper/piperdb/pkg/types"
+	"github.com/tjstebbing/piperdb/internal/dsl"
+	"github.com/tjstebbing/piperdb/internal/storage"
+	"github.com/tjstebbing/piperdb/pkg/types"
 )
 
 // piperDB implements the PiperDB interface using BoltDB storage

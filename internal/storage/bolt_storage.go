@@ -9,7 +9,7 @@ import (
 	"go.etcd.io/bbolt"
 	"github.com/google/uuid"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/types"
+	"github.com/tjstebbing/piperdb/pkg/types"
 )
 
 // BoltStorage implements the storage layer using BoltDB

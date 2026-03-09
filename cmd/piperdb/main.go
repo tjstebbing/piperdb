@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/db"
+	"github.com/tjstebbing/piperdb/pkg/db"
 )
 
 func main() {
@@ -20,7 +20,15 @@ func main() {
 	
 	// Open database
 	cfg := db.DefaultConfig()
-	cfg.DataDir = "./data"
+	if dir := os.Getenv("PIPERDB_DATA_DIR"); dir != "" {
+		cfg.DataDir = dir
+	} else {
+		cfg.DataDir = "./data"
+	}
+
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
 	
 	database, err := db.Open(cfg)
 	if err != nil {

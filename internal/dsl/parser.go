@@ -103,13 +103,15 @@ func (p *Parser) parseFilterStage() (Stage, error) {
 		}
 		conditions = append(conditions, condition)
 		
-		// Check for logic operators
+		// Check for logic operators or implicit AND (adjacent @filters)
 		if p.match(AND) {
 			continue // Parse next condition with AND
 		} else if p.match(OR) {
 			// For now, treat all as AND for simplicity
 			// TODO: Handle mixed AND/OR with precedence
 			continue
+		} else if p.check(AT) {
+			continue // Implicit AND: @field:val @field2:val2
 		} else {
 			break
 		}
@@ -174,6 +176,12 @@ func (p *Parser) parseFilterOperator() (FilterOp, error) {
 		case GT:
 			p.advance()
 			return OpGreaterThan, nil
+		case LTE:
+			p.advance()
+			return OpLessThanEqual, nil
+		case GTE:
+			p.advance()
+			return OpGreaterThanEqual, nil
 		case NEQ:
 			p.advance()
 			return OpNotEquals, nil

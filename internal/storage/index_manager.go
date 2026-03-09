@@ -8,7 +8,7 @@ import (
 
 	"go.etcd.io/bbolt"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/types"
+	"github.com/tjstebbing/piperdb/pkg/types"
 )
 
 // IndexManager handles creation and management of field indexes

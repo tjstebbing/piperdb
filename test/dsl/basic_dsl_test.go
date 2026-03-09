@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tjstebbing/piper/piperdb/internal/dsl"
+	"github.com/tjstebbing/piperdb/internal/dsl"
 )
 
 func TestLexer(t *testing.T) {

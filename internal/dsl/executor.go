@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/types"
+	"github.com/tjstebbing/piperdb/pkg/types"
 )
 
 // Executor executes parsed DSL expressions against data
@@ -63,8 +63,6 @@ func (e *Executor) Execute(ctx context.Context, listID string, pipe *PipeExpr, o
 	
 	// Execute each stage
 	for i, stage := range pipe.Stages {
-		stageStart := time.Now()
-		
 		err := e.executeStage(ctx, execCtx, stage)
 		if err != nil {
 			return nil, fmt.Errorf("stage %d: %w", i+1, err)
@@ -74,8 +72,6 @@ func (e *Executor) Execute(ctx context.Context, listID string, pipe *PipeExpr, o
 		if i == len(pipe.Stages)-1 && opts != nil {
 			e.applyPagination(execCtx, opts)
 		}
-		
-		fmt.Printf("Stage %d took %v, items: %d\n", i+1, time.Since(stageStart), len(execCtx.Items))
 	}
 	
 	// Build result

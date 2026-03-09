@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/types"
+	"github.com/tjstebbing/piperdb/pkg/types"
 )
 
 // PiperDB defines the pure list database interface

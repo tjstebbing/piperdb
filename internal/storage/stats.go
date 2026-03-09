@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tjstebbing/piper/piperdb/pkg/types"
+	"github.com/tjstebbing/piperdb/pkg/types"
 )
 
 // StorageStats tracks storage performance and usage statistics

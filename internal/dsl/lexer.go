@@ -63,17 +63,7 @@ func (l *Lexer) NextToken() Token {
 	case '|':
 		tok = l.newToken(PIPE, string(l.ch))
 	case ':':
-		if l.peekChar() == '<' {
-			ch := l.ch
-			l.readChar()
-			tok = l.newToken(LTE, string(ch)+string(l.ch))
-		} else if l.peekChar() == '>' {
-			ch := l.ch
-			l.readChar()
-			tok = l.newToken(GTE, string(ch)+string(l.ch))
-		} else {
-			tok = l.newToken(COLON, string(l.ch))
-		}
+		tok = l.newToken(COLON, string(l.ch))
 	case '<':
 		if l.peekChar() == '=' {
 			ch := l.ch
