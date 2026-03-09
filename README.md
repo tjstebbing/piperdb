@@ -43,6 +43,68 @@ go build ./cmd/piperdb
 ./piperdb query products '@brand:Apple | count'
 ```
 
+## 📖 DSL Syntax Reference
+
+PiperDB queries are built from **stages** separated by pipes (`|`). Data flows left to right through each stage.
+
+```
+<stage> | <stage> | <stage> ...
+```
+
+### Filter Expressions
+
+Filters select items by field value. The `@` symbol marks the start of a field filter, followed by the field name, an operator, and a value:
+
+```
+@<field><operator><value>
+```
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `@field:value` | Equals | `@brand:Apple` |
+| `@field:>value` | Greater than | `@price:>100` |
+| `@field:<value` | Less than | `@price:<1000` |
+| `@field:>=value` | Greater than or equal | `@rating:>=4.5` |
+| `@field:<=value` | Less than or equal | `@stock:<=10` |
+| `@field:!=value` | Not equal | `@status:!=draft` |
+| `@field~pattern` | Regex/fuzzy match | `@name~iPhone` |
+| `@field^prefix` | Starts with | `@name^Mac` |
+| `@field$suffix` | Ends with | `@sku$Pro` |
+| `"text"` | Full-text search (all string fields) | `"wireless"` |
+
+The `:` is the **equals operator** — it is not part of the field name. Comparison operators (`:>`, `:<`, `:>=`, `:<=`, `:!=`) extend it. The pattern operators (`~`, `^`, `$`) replace the colon entirely since they are unambiguous on their own.
+
+Multiple filters in the same stage are combined with implicit AND:
+
+```bash
+@category:phone @price:<500        # both conditions must match
+```
+
+### Stage Keywords
+
+| Stage | Syntax | Purpose |
+|-------|--------|---------|
+| `sort` | `sort field -field` | Sort ascending; prefix `-` for descending |
+| `select` | `select field1 field2` | Keep only named fields |
+| `map` | `map {field, old: new}` | Reshape and rename fields |
+| `pluck` | `pluck field` | Extract a single field |
+| `take` | `take N` | Limit to first N results |
+| `skip` | `skip N` | Skip first N results |
+| `first` | `first` | First item only |
+| `last` | `last` | Last item only |
+| `count` | `count` | Count items |
+| `sum` | `sum field` | Sum numeric field |
+| `avg` | `avg field` | Average of numeric field |
+| `min` | `min field` | Minimum value |
+| `max` | `max field` | Maximum value |
+| `group-by` | `group-by field` | Group items by field value |
+
+### Field Names
+
+Field names are identifiers that may contain letters, digits, underscores, and hyphens (e.g. `price`, `first_name`, `item-count`). They are case-sensitive and correspond to keys in the stored JSON data.
+
+---
+
 ## 🎯 DSL Query Examples
 
 PiperDB's query language is designed to be intuitive yet powerful. Here are comprehensive examples:
