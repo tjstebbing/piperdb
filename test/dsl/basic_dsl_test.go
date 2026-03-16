@@ -17,13 +17,13 @@ func TestLexer(t *testing.T) {
 	}{
 		{
 			name:     "Simple filter",
-			input:    "@price:<100",
-			expected: []dsl.TokenType{dsl.AT, dsl.FIELD, dsl.COLON, dsl.LT, dsl.NUMBER},
+			input:    "@price<100",
+			expected: []dsl.TokenType{dsl.AT, dsl.FIELD, dsl.LT, dsl.NUMBER},
 		},
 		{
 			name:     "Pipe with sort",
-			input:    "@category:electronics | sort -price",
-			expected: []dsl.TokenType{dsl.AT, dsl.FIELD, dsl.COLON, dsl.FIELD, dsl.PIPE, dsl.SORT, dsl.MINUS, dsl.FIELD},
+			input:    "@category=electronics | sort -price",
+			expected: []dsl.TokenType{dsl.AT, dsl.FIELD, dsl.EQ, dsl.FIELD, dsl.PIPE, dsl.SORT, dsl.MINUS, dsl.FIELD},
 		},
 		{
 			name:     "Text search",
@@ -63,12 +63,12 @@ func TestParser(t *testing.T) {
 	}{
 		{
 			name:      "Simple filter",
-			input:     "@price:<100",
+			input:     "@price<100",
 			expectErr: false,
 		},
 		{
 			name:      "Filter with sort",
-			input:     "@category:electronics | sort -price",
+			input:     "@category=electronics | sort -price",
 			expectErr: false,
 		},
 		{
@@ -88,12 +88,12 @@ func TestParser(t *testing.T) {
 		},
 		{
 			name:      "Complex pipeline",
-			input:     "@category:electronics | @price:>100 | sort -price | take 10",
+			input:     "@category=electronics | @price>100 | sort -price | take 10",
 			expectErr: false,
 		},
 		{
 			name:      "Count aggregation",
-			input:     "@status:published | count",
+			input:     "@status=published | count",
 			expectErr: false,
 		},
 		{
@@ -132,7 +132,7 @@ func TestParser(t *testing.T) {
 
 func TestFilterStageCreation(t *testing.T) {
 	t.Run("Field filter", func(t *testing.T) {
-		pipe, err := dsl.ParseExpression("@price:<100")
+		pipe, err := dsl.ParseExpression("@price<100")
 		require.NoError(t, err)
 		require.Len(t, pipe.Stages, 1)
 
@@ -270,7 +270,7 @@ func TestSliceStageCreation(t *testing.T) {
 }
 
 func TestComplexPipeline(t *testing.T) {
-	input := "@category:electronics | @price:>100 | sort -price | take 5 | select name price"
+	input := "@category=electronics | @price>100 | sort -price | take 5 | select name price"
 	
 	pipe, err := dsl.ParseExpression(input)
 	require.NoError(t, err)

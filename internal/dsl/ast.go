@@ -284,17 +284,17 @@ func (s *SetOpStage) String() string {
 func (op FilterOp) String() string {
 	switch op {
 	case OpEquals:
-		return ":"
+		return "="
 	case OpNotEquals:
-		return ":!="
+		return "!="
 	case OpLessThan:
-		return ":<"
+		return "<"
 	case OpLessThanEqual:
-		return ":<="
+		return "<="
 	case OpGreaterThan:
-		return ":>"
+		return ">"
 	case OpGreaterThanEqual:
-		return ":>="
+		return ">="
 	case OpMatch:
 		return "~"
 	case OpPrefix:
@@ -302,11 +302,11 @@ func (op FilterOp) String() string {
 	case OpSuffix:
 		return "$"
 	case OpExists:
-		return ":exists"
+		return "=exists"
 	case OpContains:
 		return "contains"
 	default:
-		return ":"
+		return "="
 	}
 }
 

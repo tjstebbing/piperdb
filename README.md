@@ -2,7 +2,7 @@
 
 🚀 **High-Performance List Database with Expressive Query Language**
 
-PiperDB is a specialized database engine optimized for storing and querying lists of heterogeneous data. It features a powerful pipe-based DSL inspired by Redis and jq, automatic schema inference, and sub-millisecond query performance.
+PiperDB is a specialized database engine optimized for storing and querying lists of heterogeneous data. It features a powerful pipe-based DSL inspired by jq, automatic schema inference, and sub-millisecond query performance.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Go Version](https://img.shields.io/badge/go-1.21+-blue.svg)
@@ -11,7 +11,7 @@ PiperDB is a specialized database engine optimized for storing and querying list
 ## ✨ Features
 
 - 📋 **List-First Design**: Optimized storage for heterogeneous list data
-- 🔍 **Expressive DSL**: Redis + jq inspired pipe-based query language
+- 🔍 **Expressive DSL**: jq-inspired pipe-based query language
 - 🧠 **Smart Schema**: Automatic schema detection and evolution
 - ⚡ **High Performance**: Sub-millisecond query execution
 - 🛡️ **ACID Compliance**: Built on BoltDB with full transaction support
@@ -38,9 +38,9 @@ go build ./cmd/piperdb
 ./piperdb add-item products '{"name":"Pixel","price":799,"brand":"Google","category":"phone"}'
 
 # Query with the DSL
-./piperdb query products '@price:<1000 | sort price'
-./piperdb query products '@category:phone | select name price'
-./piperdb query products '@brand:Apple | count'
+./piperdb query products '@price<1000 | sort price'
+./piperdb query products '@category=phone | select name price'
+./piperdb query products '@brand=Apple | count'
 ```
 
 ## 📖 DSL Syntax Reference
@@ -61,23 +61,23 @@ Filters select items by field value. The `@` symbol marks the start of a field f
 
 | Syntax | Meaning | Example |
 |--------|---------|---------|
-| `@field:value` | Equals | `@brand:Apple` |
-| `@field:>value` | Greater than | `@price:>100` |
-| `@field:<value` | Less than | `@price:<1000` |
-| `@field:>=value` | Greater than or equal | `@rating:>=4.5` |
-| `@field:<=value` | Less than or equal | `@stock:<=10` |
-| `@field:!=value` | Not equal | `@status:!=draft` |
+| `@field=value` | Equals | `@brand=Apple` |
+| `@field>value` | Greater than | `@price>100` |
+| `@field<value` | Less than | `@price<1000` |
+| `@field>=value` | Greater than or equal | `@rating>=4.5` |
+| `@field<=value` | Less than or equal | `@stock<=10` |
+| `@field!=value` | Not equal | `@status!=draft` |
 | `@field~pattern` | Regex/fuzzy match | `@name~iPhone` |
 | `@field^prefix` | Starts with | `@name^Mac` |
 | `@field$suffix` | Ends with | `@sku$Pro` |
 | `"text"` | Full-text search (all string fields) | `"wireless"` |
 
-The `:` is the **equals operator** — it is not part of the field name. Comparison operators (`:>`, `:<`, `:>=`, `:<=`, `:!=`) extend it. The pattern operators (`~`, `^`, `$`) replace the colon entirely since they are unambiguous on their own.
+`=` is the **equals operator**. The comparison operators (`>`, `<`, `>=`, `<=`, `!=`) are standard and self-evident. The pattern operators (`~`, `^`, `$`) work the same way.
 
 Multiple filters in the same stage are combined with implicit AND:
 
 ```bash
-@category:phone @price:<500        # both conditions must match
+@category=phone @price<500          # both conditions must match
 ```
 
 ### Stage Keywords
@@ -112,15 +112,15 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 ### 🔍 **Filtering**
 
 ```bash
-# Field-based filtering (Redis-style)
-./piperdb query products '@price:<1000'              # Price less than 1000
-./piperdb query products '@price:>=500'             # Price 500 or more  
-./piperdb query products '@brand:Apple'             # Exact match
-./piperdb query products '@category:phone'          # Category equals phone
+# Field-based filtering
+./piperdb query products '@price<1000'               # Price less than 1000
+./piperdb query products '@price>=500'               # Price 500 or more  
+./piperdb query products '@brand=Apple'              # Exact match
+./piperdb query products '@category=phone'           # Category equals phone
 
 # Range filtering
-./piperdb query products '@price:>100 @price:<500'  # Price between 100-500
-./piperdb query products '@rating:>=4'              # High rated items
+./piperdb query products '@price>100 @price<500'     # Price between 100-500
+./piperdb query products '@rating>=4'                # High rated items
 
 # Text pattern matching
 ./piperdb query products '@name~iPhone'             # Name contains iPhone (regex)
@@ -137,8 +137,8 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 ./piperdb query documents '"machine learning"'     # ML-related documents
 
 # Combined text search and filtering
-./piperdb query products '"wireless" @price:<200'   # Wireless items under $200
-./piperdb query articles '"AI" @status:published'   # Published AI articles
+./piperdb query products '"wireless" @price<200'    # Wireless items under $200
+./piperdb query articles '"AI" @status=published'   # Published AI articles
 ```
 
 ### 🔄 **Transformations**
@@ -176,7 +176,7 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 ```bash
 # Basic counting
 ./piperdb query products 'count'                    # Total product count
-./piperdb query orders '@status:completed | count'  # Completed orders
+./piperdb query orders '@status=completed | count'   # Completed orders
 
 # Numeric aggregations
 ./piperdb query products 'sum price'                # Total inventory value
@@ -211,8 +211,8 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 ```bash
 # E-commerce analytics
 ./piperdb query products '
-  @category:electronics | 
-  @price:>100 @rating:>=4 | 
+  @category=electronics | 
+  @price>100 @rating>=4 | 
   sort -rating -price | 
   take 10 | 
   select name price rating brand
@@ -220,7 +220,7 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 
 # Content management
 ./piperdb query articles '
-  @status:published | 
+  @status=published | 
   "tutorial" | 
   sort -views | 
   map {title, author, views, url} | 
@@ -229,16 +229,16 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 
 # Inventory analysis  
 ./piperdb query inventory '
-  @stock:<10 | 
-  @category:critical | 
+  @stock<10 | 
+  @category=critical | 
   sort category -priority | 
   select sku name stock category supplier
 '
 
 # User engagement
 ./piperdb query users '
-  @last_login:>2024-01-01 | 
-  @plan:premium | 
+  @last_login>2024-01-01 | 
+  @plan=premium | 
   sort -activity_score | 
   map {username, email, score: activity_score}
 '
@@ -257,10 +257,10 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 }'
 
 # Business queries
-./piperdb query products '@price:<500 @rating:>=4 | sort -rating | take 10'
-./piperdb query products '@category:smartphone | group-by brand'  
-./piperdb query products '@stock:<10 | select name stock supplier'
-./piperdb query products '"wireless" @category:accessories | sort price'
+./piperdb query products '@price<500 @rating>=4 | sort -rating | take 10'
+./piperdb query products '@category=smartphone | group-by brand'  
+./piperdb query products '@stock<10 | select name stock supplier'
+./piperdb query products '"wireless" @category=accessories | sort price'
 ```
 
 #### 📰 **Content Management System**
@@ -274,10 +274,10 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 }'
 
 # Editorial queries
-./piperdb query articles '@status:draft | sort -created_date'
-./piperdb query articles '"golang" @status:published | sort -views | take 5'  
+./piperdb query articles '@status=draft | sort -created_date'
+./piperdb query articles '"golang" @status=published | sort -views | take 5'  
 ./piperdb query articles 'group-by author | map {author: .key, count: count()}'
-./piperdb query articles '@published_date:>2024-01-01 | avg views'
+./piperdb query articles '@published_date>2024-01-01 | avg views'
 ```
 
 #### 👥 **User Management & Analytics**
@@ -291,8 +291,8 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 }'
 
 # Admin and analytics queries
-./piperdb query users '@plan:premium @last_active:>2024-01-01 | count'
-./piperdb query users '@total_projects:>5 | sort -last_active | select username email plan'
+./piperdb query users '@plan=premium @last_active>2024-01-01 | count'
+./piperdb query users '@total_projects>5 | sort -last_active | select username email plan'
 ./piperdb query users 'group-by plan | map {plan: .key, users: count(), avg_projects: avg(.value.total_projects)}'
 ```
 
@@ -307,9 +307,9 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 }'
 
 # Business intelligence queries
-./piperdb query orders '@status:completed | group-by region | map {region: .key, revenue: sum(.value.total)}'
-./piperdb query orders '@order_date:>2024-01-01 | avg total'
-./piperdb query orders '@total:>100 @region:north | sort -total | take 20'
+./piperdb query orders '@status=completed | group-by region | map {region: .key, revenue: sum(.value.total)}'
+./piperdb query orders '@order_date>2024-01-01 | avg total'
+./piperdb query orders '@total>100 @region=north | sort -total | take 20'
 ./piperdb query orders 'group-by customer_id | map {customer: .key, orders: count(), lifetime_value: sum(.value.total)}'
 ```
 
@@ -349,10 +349,10 @@ piperdb/
 
 ### Real Query Performance
 ```bash
-$ ./piperdb query products '@price:<1000 | sort price'
+$ ./piperdb query products '@price<1000 | sort price'
 # Results (1 items, took 570μs)
 
-$ ./piperdb query products '@brand:Apple | count'  
+$ ./piperdb query products '@brand=Apple | count'  
 # Results (1 items, took 321μs)
 
 $ ./piperdb query products 'select name price'
@@ -400,7 +400,7 @@ func main() {
 
     // Query with DSL
     results, err := database.ExecutePipe(ctx, "my-list", 
-        "@category:test | @value:>10 | sort -value", nil)
+        "@category=test | @value>10 | sort -value", nil)
     if err != nil {
         panic(err)
     }

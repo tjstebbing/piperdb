@@ -115,8 +115,8 @@ func printUsage() {
 	fmt.Println(`  piperdb create-list products`)
 	fmt.Println(`  piperdb add-item products '{"name":"iPhone","price":999}'`)
 	fmt.Println(`  piperdb list-items products`)
-	fmt.Println(`  piperdb query products '@price:<1000 | sort -price'`)
-	fmt.Println(`  piperdb validate '@category:electronics | count'`)
+	fmt.Println(`  piperdb query products '@price<1000 | sort -price'`)
+	fmt.Println(`  piperdb validate '@category=electronics | count'`)
 }
 
 func createList(ctx context.Context, db db.PiperDB, listID string) {

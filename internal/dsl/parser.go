@@ -165,29 +165,9 @@ func (p *Parser) parseFilterOperator() (FilterOp, error) {
 	token := p.currentToken()
 	
 	switch token.Type {
-	case COLON:
+	case EQ:
 		p.advance()
-		// Check for special colon operators
-		next := p.currentToken()
-		switch next.Type {
-		case LT:
-			p.advance()
-			return OpLessThan, nil
-		case GT:
-			p.advance()
-			return OpGreaterThan, nil
-		case LTE:
-			p.advance()
-			return OpLessThanEqual, nil
-		case GTE:
-			p.advance()
-			return OpGreaterThanEqual, nil
-		case NEQ:
-			p.advance()
-			return OpNotEquals, nil
-		default:
-			return OpEquals, nil
-		}
+		return OpEquals, nil
 	case LTE:
 		p.advance()
 		return OpLessThanEqual, nil

@@ -59,15 +59,15 @@ echo "============================"
 
 echo ""
 echo "1. Find products under $1000:"
-"$PIPERDB" query products '@price:<1000'
+"$PIPERDB" query products '@price<1000'
 
 echo ""
 echo "2. Find Apple products:"
-"$PIPERDB" query products '@brand:Apple'
+"$PIPERDB" query products '@brand=Apple'
 
 echo ""
 echo "3. Find smartphones with rating >= 4.5:"
-"$PIPERDB" query products '@category:smartphone @rating:>=4.5'
+"$PIPERDB" query products '@category=smartphone @rating>=4.5'
 
 echo ""
 echo "📊 Sorting and Selection Examples"
@@ -83,7 +83,7 @@ echo "2. Products by category and price (name and price only):"
 
 echo ""
 echo "3. Cheapest smartphone:"
-"$PIPERDB" query products '@category:smartphone | sort price | first'
+"$PIPERDB" query products '@category=smartphone | sort price | first'
 
 echo ""
 echo "🔢 Aggregation Examples"
@@ -92,11 +92,11 @@ echo "======================="
 echo ""
 echo "1. Count products by brand:"
 echo "Apple:"
-"$PIPERDB" query products '@brand:Apple | count'
+"$PIPERDB" query products '@brand=Apple | count'
 echo "Google:" 
-"$PIPERDB" query products '@brand:Google | count'
+"$PIPERDB" query products '@brand=Google | count'
 echo "Samsung:"
-"$PIPERDB" query products '@brand:Samsung | count'
+"$PIPERDB" query products '@brand=Samsung | count'
 
 echo ""
 echo "2. Average price of all products:"
@@ -112,11 +112,11 @@ echo "=============================="
 
 echo ""
 echo "1. Published articles by views:"
-"$PIPERDB" query articles '@status:published | sort -views'
+"$PIPERDB" query articles '@status=published | sort -views'
 
 echo ""
 echo "2. Articles by Alice:"
-"$PIPERDB" query articles '@author:Alice'
+"$PIPERDB" query articles '@author=Alice'
 
 echo ""
 echo "3. Articles containing 'Go':"
@@ -132,7 +132,7 @@ echo "1. Product summary (rename fields):"
 
 echo ""
 echo "2. Article metadata only:"
-"$PIPERDB" query articles '@status:published | select title author views'
+"$PIPERDB" query articles '@status=published | select title author views'
 
 echo ""
 echo "📈 Complex Pipeline Examples"
@@ -140,11 +140,11 @@ echo "============================"
 
 echo ""
 echo "1. E-commerce analytics:"
-"$PIPERDB" query products '@rating:>=4.5 @price:>500 | sort -rating -price | select name price rating brand | take 3'
+"$PIPERDB" query products '@rating>=4.5 @price>500 | sort -rating -price | select name price rating brand | take 3'
 
 echo ""
 echo "2. Content performance analysis:"
-"$PIPERDB" query articles '@status:published | sort -views | map {title, author, performance: views} | take 3'
+"$PIPERDB" query articles '@status=published | sort -views | map {title, author, performance: views} | take 3'
 
 echo ""
 echo "🎯 Schema Information"
@@ -180,4 +180,4 @@ echo "   • Sub-millisecond query performance"
 echo "   • Rich filtering, sorting, and aggregation capabilities"
 echo ""
 echo "Try your own queries with: "$PIPERDB" query <list-name> '<pipe-expression>'"
-echo "Example: "$PIPERDB" query products '@price:<800 @rating:>4 | sort -rating | take 5'"
+echo "Example: "$PIPERDB" query products '@price<800 @rating>4 | sort -rating | take 5'"

@@ -176,7 +176,7 @@ type PipeStage interface {
     EstimateCost(*QueryContext) float64
 }
 
-// Filter stage: @field:value, "search terms"
+// Filter stage: @field=value, "search terms"
 type FilterStage struct {
     Conditions []FilterCondition
 }
@@ -515,7 +515,7 @@ func (si *SchemaInference) UpdateSchema(schema *Schema, newItem map[string]inter
 
 ```yaml
 Query Performance:
-  Simple Filter: <10ms     # @price:<100
+  Simple Filter: <10ms     # @price<100
   Complex Pipe: <100ms     # Multiple stages, aggregation
   Full-Text Search: <50ms  # Text search with ranking
   
@@ -688,7 +688,7 @@ func TestPipeExecution(t *testing.T) {
         expected int
     }{
         {"items | count", 100},
-        {"items | @price:<50 | count", 25},
+        {"items | @price<50 | count", 25},
         {"items | sort -price | first", 1},
     }
     
@@ -709,7 +709,7 @@ func BenchmarkSimpleFilter(b *testing.B) {
     
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        _, err := db.ExecutePipe(context.Background(), "bench-list", "items | @category:electronics", nil)
+        _, err := db.ExecutePipe(context.Background(), "bench-list", "items | @category=electronics", nil)
         if err != nil {
             b.Fatal(err)
         }
@@ -728,7 +728,7 @@ func TestConcurrentQueries(t *testing.T) {
         wg.Add(1)
         go func() {
             defer wg.Done()
-            _, err := db.ExecutePipe(context.Background(), "test-list", "items | @id:exists | count", nil)
+            _, err := db.ExecutePipe(context.Background(), "test-list", "items | @id=exists | count", nil)
             if err != nil {
                 errors <- err
             }
