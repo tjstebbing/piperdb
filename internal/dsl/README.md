@@ -3,24 +3,29 @@
 ## Syntax Overview
 
 ```
-pipe := list-name '|' stage ('|' stage)*
+pipe := stage ('|' stage)*
 stage := filter | transform | sort | aggregate | slice | setop
 
 # Filter stages
-filter := '@' field op value | text-search | boolean-expr
-op := ':' | ':<' | ':>' | ':>=' | ':<=' | ':!=' | '~' | '^' | '$'
-text-search := '"' text '"' | word+
+filter := '@' field-path op value | text-search | boolean-expr
+op := '=' | '<' | '>' | '>=' | '<=' | '!=' | '~' | '^' | '$'
+text-search := '"' text '"'
 boolean-expr := filter 'AND' filter | filter 'OR' filter | 'NOT' filter
 
+# Field paths (nested access)
+field-path := field ('.' field)* ('[' index ']' | '[]')*
+field := identifier
+index := number
+
 # Transform stages  
-transform := 'map' '{' field-list '}' | 'select' field-list | 'pluck' field
-field-list := field (',' field)*
+transform := 'map' '{' field-spec (',' field-spec)* '}' | 'select' field-path+ | 'pluck' field-path
+field-spec := field-path (':' identifier)?
 
 # Sort stages
-sort := 'sort' ('-'?) field
+sort := 'sort' ('-'? field-path)+
 
 # Aggregate stages
-aggregate := 'count' | 'sum' field | 'avg' field | 'group-by' field
+aggregate := 'count' | 'sum' field-path | 'avg' field-path | 'min' field-path | 'max' field-path | 'group-by' field-path+
 
 # Slice stages
 slice := 'take' number | 'skip' number | 'first' | 'last'
@@ -33,16 +38,24 @@ setop := 'union' list | 'diff' list | 'intersect' list
 
 ```
 # Simple filtering
-products | @price:<1000 | @brand:Apple
+@price<1000 | @brand=Apple
+
+# Nested field access
+@user.profile.name=Alice | @user.address.city=Sydney
+
+# Array access
+@tags[0]=golang                    # first element equals "golang"
+@tags[]=phone                      # any element equals "phone"
+@items[].price>100                 # any item's price > 100
 
 # Text search with filtering  
-blog-posts | "golang tutorial" @status:published | sort -date
+"golang tutorial" | @status=published | sort -date
 
 # Aggregation and grouping
-orders | @status:completed | group-by customer | map {customer: .key, total: count()}
+@status=completed | group-by customer
 
 # Complex pipeline
-products | @category:electronics @price:>100 | sort price | take 10 | select name price
+@category=electronics @price>100 | sort price | take 10 | select name price
 ```
 
 ## Implementation Architecture
@@ -50,25 +63,39 @@ products | @category:electronics @price:>100 | sort price | take 10 | select nam
 ```
 Input String
      ↓
-   Lexer     → Token stream: [FIELD, COLON, NUMBER, PIPE, SORT, ...]
+   Lexer     → Token stream: [AT, FIELD, LT, NUMBER, PIPE, SORT, ...]
      ↓
    Parser    → AST: PipeExpr{stages: [FilterStage{...}, SortStage{...}]}  
      ↓
-  Executor   → Execute against storage: ResultSet
+  Executor   → Resolves field paths, executes against storage → ResultSet
 ```
 
 ## Token Types
 
 - **Literals**: FIELD, NUMBER, STRING, BOOLEAN
-- **Operators**: PIPE, COLON, LT, GT, EQ, etc.
-- **Keywords**: MAP, SELECT, SORT, COUNT, etc.
-- **Symbols**: LBRACE, RBRACE, COMMA, MINUS, etc.
+- **Operators**: PIPE, EQ, LT, GT, LTE, GTE, NEQ, MATCH, PREFIX, SUFFIX
+- **Keywords**: MAP, SELECT, SORT, COUNT, SUM, AVG, MIN, MAX, GROUP_BY, TAKE, SKIP, FIRST, LAST, AND, OR, NOT
+- **Symbols**: LBRACE, RBRACE, LBRACKET, RBRACKET, LPAREN, RPAREN, COMMA, MINUS, DOT, AT, COLON
 
 ## AST Nodes
 
 - **PipeExpr**: Root node containing stages
 - **FilterStage**: Field filtering and text search
-- **TransformStage**: Field selection and mapping  
-- **SortStage**: Ordering operations
-- **AggregateStage**: Counting, summing, grouping
-- **SliceStage**: Limiting and pagination
+  - Uses `FieldPath` for nested access (`user.profile.name`, `tags[]`, `items[].price`)
+  - Wildcard `[]` matches if ANY array element satisfies the condition
+- **TransformStage**: Field selection and mapping (map, select, pluck)
+- **SortStage**: Ordering by field paths, prefix `-` for descending
+- **AggregateStage**: count, sum, avg, min, max, group-by
+- **SliceStage**: take, skip, first, last
+
+## FieldPath
+
+The `FieldPath` type represents paths through nested JSON structures:
+
+| Segment Type | Syntax | Example |
+|-------------|--------|---------|
+| `SegmentField` | `name` | Object key access |
+| `SegmentIndex` | `[0]` | Array index access |
+| `SegmentWildcard` | `[]` | All array elements |
+
+Paths are resolved by `resolveFieldPath()` in the executor, which traverses the data and returns all matching values. For wildcards, filter conditions match if any resolved value satisfies the comparison.
