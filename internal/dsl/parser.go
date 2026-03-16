@@ -138,7 +138,7 @@ func (p *Parser) parseFilterCondition() (FilterCondition, error) {
 		return FilterCondition{}, fmt.Errorf("expected field name after '@'")
 	}
 	
-	field := p.advance().Value
+	path := p.parseFieldPath()
 	
 	// Parse operator
 	op, err := p.parseFilterOperator()
@@ -153,11 +153,54 @@ func (p *Parser) parseFilterCondition() (FilterCondition, error) {
 	}
 	
 	return FilterCondition{
-		Field:    field,
+		Path:     path,
 		Operator: op,
 		Value:    value,
 		Negate:   negate,
 	}, nil
+}
+
+// parseFieldPath parses a field path like user.profile.name, tags[0], items[].price
+func (p *Parser) parseFieldPath() FieldPath {
+	path := FieldPath{}
+	
+	// First segment must be a field name
+	if p.currentToken().Type != FIELD {
+		return path
+	}
+	path.Segments = append(path.Segments, PathSegment{Type: SegmentField, Name: p.advance().Value})
+	
+	// Continue parsing dot access and bracket access
+	for {
+		if p.check(DOT) {
+			p.advance() // consume '.'
+			if p.currentToken().Type != FIELD {
+				break
+			}
+			path.Segments = append(path.Segments, PathSegment{Type: SegmentField, Name: p.advance().Value})
+		} else if p.check(LBRACKET) {
+			p.advance() // consume '['
+			if p.check(RBRACKET) {
+				// Wildcard: []
+				p.advance() // consume ']'
+				path.Segments = append(path.Segments, PathSegment{Type: SegmentWildcard})
+			} else if p.currentToken().Type == NUMBER {
+				// Index: [N]
+				idxTok := p.advance()
+				idx, _ := strconv.ParseInt(idxTok.Value, 10, 64)
+				if !p.match(RBRACKET) {
+					break
+				}
+				path.Segments = append(path.Segments, PathSegment{Type: SegmentIndex, Index: int(idx)})
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+	}
+	
+	return path
 }
 
 // parseFilterOperator parses filter operators
@@ -235,7 +278,7 @@ func (p *Parser) parseTextSearchStage() (Stage, error) {
 	searchText := p.advance().Value
 	
 	condition := FilterCondition{
-		Field:    "", // Empty field for text search
+		Path:     FieldPath{}, // Empty path for text search
 		Operator: OpContains,
 		Value:    searchText,
 		Negate:   false,
@@ -298,8 +341,8 @@ func (p *Parser) parseSelectTransform() (Stage, error) {
 	fields := []FieldSpec{}
 	
 	for p.currentToken().Type == FIELD {
-		fieldName := p.advance().Value
-		fields = append(fields, FieldSpec{Source: fieldName, Target: fieldName})
+		path := p.parseFieldPath()
+		fields = append(fields, FieldSpec{Source: path, Target: path.Simple()})
 	}
 	
 	if len(fields) == 0 {
@@ -318,11 +361,11 @@ func (p *Parser) parsePluckTransform() (Stage, error) {
 		return nil, fmt.Errorf("pluck requires a field name")
 	}
 	
-	fieldName := p.advance().Value
+	path := p.parseFieldPath()
 	
 	return &TransformStage{
 		TransformType: TransformPluck,
-		Fields:        []FieldSpec{{Source: fieldName, Target: fieldName}},
+		Fields:        []FieldSpec{{Source: path, Target: path.Simple()}},
 	}, nil
 }
 
@@ -332,8 +375,8 @@ func (p *Parser) parseFieldSpec() (FieldSpec, error) {
 		return FieldSpec{}, fmt.Errorf("expected field name")
 	}
 	
-	source := p.advance().Value
-	target := source
+	source := p.parseFieldPath()
+	target := source.Simple()
 	
 	// Check for rename: source: target
 	if p.match(COLON) {
@@ -363,8 +406,8 @@ func (p *Parser) parseSortStage() (Stage, error) {
 			return nil, fmt.Errorf("expected field name in sort")
 		}
 		
-		fieldName := p.advance().Value
-		fields = append(fields, SortField{Field: fieldName, Descending: descending})
+		path := p.parseFieldPath()
+		fields = append(fields, SortField{Path: path, Descending: descending})
 	}
 	
 	if len(fields) == 0 {
@@ -416,20 +459,20 @@ func (p *Parser) parseAggregateStage() (Stage, error) {
 	}
 }
 
-// parseAggregateField parses field name for aggregation
-func (p *Parser) parseAggregateField() (string, error) {
+// parseAggregateField parses field path for aggregation
+func (p *Parser) parseAggregateField() (FieldPath, error) {
 	if p.currentToken().Type != FIELD {
-		return "", fmt.Errorf("expected field name for aggregation")
+		return FieldPath{}, fmt.Errorf("expected field name for aggregation")
 	}
-	return p.advance().Value, nil
+	return p.parseFieldPath(), nil
 }
 
 // parseGroupByFields parses multiple fields for group-by
-func (p *Parser) parseGroupByFields() ([]string, error) {
-	fields := []string{}
+func (p *Parser) parseGroupByFields() ([]FieldPath, error) {
+	var fields []FieldPath
 	
 	for p.currentToken().Type == FIELD {
-		fields = append(fields, p.advance().Value)
+		fields = append(fields, p.parseFieldPath())
 	}
 	
 	if len(fields) == 0 {

@@ -5,6 +5,72 @@ import (
 	"strings"
 )
 
+// PathSegmentType represents the type of a path segment
+type PathSegmentType int
+
+const (
+	SegmentField    PathSegmentType = iota // field name access
+	SegmentIndex                           // array index [N]
+	SegmentWildcard                        // array wildcard []
+)
+
+// PathSegment represents one segment of a field path
+type PathSegment struct {
+	Type  PathSegmentType
+	Name  string // for SegmentField
+	Index int    // for SegmentIndex
+}
+
+// FieldPath represents a path to a value in nested data
+type FieldPath struct {
+	Segments []PathSegment
+}
+
+// IsEmpty returns true if the path has no segments (used for text search)
+func (fp FieldPath) IsEmpty() bool {
+	return len(fp.Segments) == 0
+}
+
+// Simple returns the field name for single-segment field paths
+func (fp FieldPath) Simple() string {
+	if len(fp.Segments) == 1 && fp.Segments[0].Type == SegmentField {
+		return fp.Segments[0].Name
+	}
+	return fp.String()
+}
+
+// String returns the string representation of a field path
+func (fp FieldPath) String() string {
+	if len(fp.Segments) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for i, seg := range fp.Segments {
+		switch seg.Type {
+		case SegmentField:
+			if i == 0 {
+				parts = append(parts, seg.Name)
+			} else {
+				parts = append(parts, "."+seg.Name)
+			}
+		case SegmentIndex:
+			parts = append(parts, fmt.Sprintf("[%d]", seg.Index))
+		case SegmentWildcard:
+			parts = append(parts, "[]")
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// NewSimplePath creates a FieldPath for a simple field name
+func NewSimplePath(name string) FieldPath {
+	if name == "" {
+		return FieldPath{}
+	}
+	return FieldPath{Segments: []PathSegment{{Type: SegmentField, Name: name}}}
+}
+
 // PipeExpr represents a complete pipe expression
 type PipeExpr struct {
 	Stages []Stage
@@ -36,7 +102,7 @@ type FilterStage struct {
 
 // FilterCondition represents a single filter condition
 type FilterCondition struct {
-	Field    string     // Field name (empty for text search)
+	Path     FieldPath   // Path to field (empty for text search)
 	Operator FilterOp   // Comparison operator
 	Value    interface{} // Comparison value
 	Negate   bool       // NOT condition
@@ -84,7 +150,7 @@ const (
 
 // FieldSpec represents a field specification in transformations
 type FieldSpec struct {
-	Source string      // Source field name
+	Source FieldPath   // Source field path
 	Target string      // Target field name (for map)
 	Expr   interface{} // Optional expression (future)
 }
@@ -96,15 +162,15 @@ type SortStage struct {
 
 // SortField represents a single sort field
 type SortField struct {
-	Field      string
+	Path       FieldPath
 	Descending bool
 }
 
 // AggregateStage represents aggregation operations
 type AggregateStage struct {
 	AggregateType AggregateType
-	Field         string   // Field to aggregate (if applicable)
-	GroupBy       []string // Fields to group by
+	Field         FieldPath // Field to aggregate (if applicable)
+	GroupBy       []FieldPath // Fields to group by
 }
 
 // AggregateType represents the type of aggregation
@@ -176,8 +242,8 @@ func (f *FilterStage) String() string {
 		if cond.Negate {
 			condStr += "NOT "
 		}
-		if cond.Field != "" {
-			condStr += fmt.Sprintf("@%s%s%v", cond.Field, cond.Operator.String(), cond.Value)
+		if !cond.Path.IsEmpty() {
+			condStr += fmt.Sprintf("@%s%s%v", cond.Path.String(), cond.Operator.String(), cond.Value)
 		} else {
 			condStr += fmt.Sprintf("\"%v\"", cond.Value) // Text search
 		}
@@ -197,22 +263,23 @@ func (t *TransformStage) String() string {
 	case TransformMap:
 		var fields []string
 		for _, field := range t.Fields {
-			if field.Target != "" && field.Target != field.Source {
-				fields = append(fields, fmt.Sprintf("%s: %s", field.Target, field.Source))
+			srcStr := field.Source.String()
+			if field.Target != "" && field.Target != srcStr {
+				fields = append(fields, fmt.Sprintf("%s: %s", field.Target, srcStr))
 			} else {
-				fields = append(fields, field.Source)
+				fields = append(fields, srcStr)
 			}
 		}
 		return fmt.Sprintf("map {%s}", strings.Join(fields, ", "))
 	case TransformSelect:
 		var fields []string
 		for _, field := range t.Fields {
-			fields = append(fields, field.Source)
+			fields = append(fields, field.Source.String())
 		}
 		return fmt.Sprintf("select %s", strings.Join(fields, " "))
 	case TransformPluck:
 		if len(t.Fields) > 0 {
-			return fmt.Sprintf("pluck %s", t.Fields[0].Source)
+			return fmt.Sprintf("pluck %s", t.Fields[0].Source.String())
 		}
 		return "pluck"
 	default:
@@ -223,7 +290,7 @@ func (t *TransformStage) String() string {
 func (s *SortStage) String() string {
 	var fields []string
 	for _, field := range s.Fields {
-		fieldStr := field.Field
+		fieldStr := field.Path.String()
 		if field.Descending {
 			fieldStr = "-" + fieldStr
 		}
@@ -237,15 +304,19 @@ func (a *AggregateStage) String() string {
 	case AggCount:
 		return "count"
 	case AggSum:
-		return fmt.Sprintf("sum %s", a.Field)
+		return fmt.Sprintf("sum %s", a.Field.String())
 	case AggAvg:
-		return fmt.Sprintf("avg %s", a.Field)
+		return fmt.Sprintf("avg %s", a.Field.String())
 	case AggMin:
-		return fmt.Sprintf("min %s", a.Field)
+		return fmt.Sprintf("min %s", a.Field.String())
 	case AggMax:
-		return fmt.Sprintf("max %s", a.Field)
+		return fmt.Sprintf("max %s", a.Field.String())
 	case AggGroupBy:
-		return fmt.Sprintf("group-by %s", strings.Join(a.GroupBy, " "))
+		var fields []string
+		for _, f := range a.GroupBy {
+			fields = append(fields, f.String())
+		}
+		return fmt.Sprintf("group-by %s", strings.Join(fields, " "))
 	default:
 		return "aggregate"
 	}
@@ -328,7 +399,7 @@ func NewFilterStage(conditions ...FilterCondition) *FilterStage {
 // NewFilterCondition creates a new filter condition
 func NewFilterCondition(field string, op FilterOp, value interface{}) FilterCondition {
 	return FilterCondition{
-		Field:    field,
+		Path:     NewSimplePath(field),
 		Operator: op,
 		Value:    value,
 		Negate:   false,
@@ -338,7 +409,7 @@ func NewFilterCondition(field string, op FilterOp, value interface{}) FilterCond
 // NewTextSearch creates a text search condition
 func NewTextSearch(text string) FilterCondition {
 	return FilterCondition{
-		Field:    "", // Empty field indicates text search
+		Path:     FieldPath{}, // Empty path indicates text search
 		Operator: OpContains,
 		Value:    text,
 		Negate:   false,
@@ -356,7 +427,7 @@ func NewTransformStage(transformType TransformType, fields ...FieldSpec) *Transf
 // NewFieldSpec creates a new field specification
 func NewFieldSpec(source string) FieldSpec {
 	return FieldSpec{
-		Source: source,
+		Source: NewSimplePath(source),
 		Target: source, // Default target same as source
 	}
 }
@@ -364,7 +435,7 @@ func NewFieldSpec(source string) FieldSpec {
 // NewFieldSpecWithTarget creates a field spec with different target
 func NewFieldSpecWithTarget(source, target string) FieldSpec {
 	return FieldSpec{
-		Source: source,
+		Source: NewSimplePath(source),
 		Target: target,
 	}
 }
@@ -377,7 +448,7 @@ func NewSortStage(fields ...SortField) *SortStage {
 // NewSortField creates a new sort field
 func NewSortField(field string, descending bool) SortField {
 	return SortField{
-		Field:      field,
+		Path:       NewSimplePath(field),
 		Descending: descending,
 	}
 }
@@ -386,15 +457,19 @@ func NewSortField(field string, descending bool) SortField {
 func NewAggregateStage(aggType AggregateType, field string) *AggregateStage {
 	return &AggregateStage{
 		AggregateType: aggType,
-		Field:         field,
+		Field:         NewSimplePath(field),
 	}
 }
 
 // NewGroupByStage creates a new group-by stage
 func NewGroupByStage(fields ...string) *AggregateStage {
+	var paths []FieldPath
+	for _, f := range fields {
+		paths = append(paths, NewSimplePath(f))
+	}
 	return &AggregateStage{
 		AggregateType: AggGroupBy,
-		GroupBy:       fields,
+		GroupBy:       paths,
 	}
 }
 
@@ -467,7 +542,7 @@ func (p *PipeExpr) validateSortStage(stage *SortStage) error {
 func (p *PipeExpr) validateAggregateStage(stage *AggregateStage) error {
 	switch stage.AggregateType {
 	case AggSum, AggAvg, AggMin, AggMax:
-		if stage.Field == "" {
+		if stage.Field.IsEmpty() {
 			return fmt.Errorf("aggregate stage requires a field")
 		}
 	case AggGroupBy:

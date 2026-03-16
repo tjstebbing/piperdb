@@ -141,7 +141,7 @@ func TestFilterStageCreation(t *testing.T) {
 		require.Len(t, filterStage.Conditions, 1)
 
 		condition := filterStage.Conditions[0]
-		assert.Equal(t, "price", condition.Field)
+		assert.Equal(t, "price", condition.Path.Simple())
 		assert.Equal(t, dsl.OpLessThan, condition.Operator)
 		assert.Equal(t, int64(100), condition.Value)
 		assert.False(t, condition.Negate)
@@ -157,7 +157,7 @@ func TestFilterStageCreation(t *testing.T) {
 		require.Len(t, filterStage.Conditions, 1)
 
 		condition := filterStage.Conditions[0]
-		assert.Equal(t, "", condition.Field) // Empty field for text search
+		assert.True(t, condition.Path.IsEmpty()) // Empty path for text search
 		assert.Equal(t, dsl.OpContains, condition.Operator)
 		assert.Equal(t, "search term", condition.Value)
 	})
@@ -175,11 +175,11 @@ func TestTransformStageCreation(t *testing.T) {
 		require.Len(t, transformStage.Fields, 2)
 
 		// First field: name -> name
-		assert.Equal(t, "name", transformStage.Fields[0].Source)
+		assert.Equal(t, "name", transformStage.Fields[0].Source.Simple())
 		assert.Equal(t, "name", transformStage.Fields[0].Target)
 
 		// Second field: price -> cost
-		assert.Equal(t, "price", transformStage.Fields[1].Source)
+		assert.Equal(t, "price", transformStage.Fields[1].Source.Simple())
 		assert.Equal(t, "cost", transformStage.Fields[1].Target)
 	})
 
@@ -193,8 +193,8 @@ func TestTransformStageCreation(t *testing.T) {
 		assert.Equal(t, dsl.TransformSelect, transformStage.TransformType)
 		require.Len(t, transformStage.Fields, 2)
 
-		assert.Equal(t, "name", transformStage.Fields[0].Source)
-		assert.Equal(t, "price", transformStage.Fields[1].Source)
+		assert.Equal(t, "name", transformStage.Fields[0].Source.Simple())
+		assert.Equal(t, "price", transformStage.Fields[1].Source.Simple())
 	})
 }
 
@@ -208,11 +208,11 @@ func TestSortStageCreation(t *testing.T) {
 	require.Len(t, sortStage.Fields, 2)
 
 	// First field: name (ascending)
-	assert.Equal(t, "name", sortStage.Fields[0].Field)
+	assert.Equal(t, "name", sortStage.Fields[0].Path.Simple())
 	assert.False(t, sortStage.Fields[0].Descending)
 
 	// Second field: price (descending)
-	assert.Equal(t, "price", sortStage.Fields[1].Field)
+	assert.Equal(t, "price", sortStage.Fields[1].Path.Simple())
 	assert.True(t, sortStage.Fields[1].Descending)
 }
 
@@ -238,7 +238,7 @@ func TestAggregateStageCreation(t *testing.T) {
 			aggStage, ok := pipe.Stages[0].(*dsl.AggregateStage)
 			require.True(t, ok)
 			assert.Equal(t, tt.expected, aggStage.AggregateType)
-			assert.Equal(t, tt.field, aggStage.Field)
+			assert.Equal(t, tt.field, aggStage.Field.String())
 		})
 	}
 }
@@ -267,6 +267,91 @@ func TestSliceStageCreation(t *testing.T) {
 			assert.Equal(t, tt.amount, sliceStage.Amount)
 		})
 	}
+}
+
+func TestNestedFieldPaths(t *testing.T) {
+	t.Run("Dot notation parsing", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("@user.profile.name=Alice")
+		require.NoError(t, err)
+		require.Len(t, pipe.Stages, 1)
+
+		filterStage, ok := pipe.Stages[0].(*dsl.FilterStage)
+		require.True(t, ok)
+		condition := filterStage.Conditions[0]
+
+		assert.Equal(t, "user.profile.name", condition.Path.String())
+		assert.Len(t, condition.Path.Segments, 3)
+		assert.Equal(t, dsl.SegmentField, condition.Path.Segments[0].Type)
+		assert.Equal(t, "user", condition.Path.Segments[0].Name)
+		assert.Equal(t, "profile", condition.Path.Segments[1].Name)
+		assert.Equal(t, "name", condition.Path.Segments[2].Name)
+	})
+
+	t.Run("Array index parsing", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("@tags[0]=golang")
+		require.NoError(t, err)
+
+		filterStage := pipe.Stages[0].(*dsl.FilterStage)
+		condition := filterStage.Conditions[0]
+
+		assert.Equal(t, "tags[0]", condition.Path.String())
+		assert.Len(t, condition.Path.Segments, 2)
+		assert.Equal(t, dsl.SegmentField, condition.Path.Segments[0].Type)
+		assert.Equal(t, dsl.SegmentIndex, condition.Path.Segments[1].Type)
+		assert.Equal(t, 0, condition.Path.Segments[1].Index)
+	})
+
+	t.Run("Array wildcard parsing", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("@tags[]=golang")
+		require.NoError(t, err)
+
+		filterStage := pipe.Stages[0].(*dsl.FilterStage)
+		condition := filterStage.Conditions[0]
+
+		assert.Equal(t, "tags[]", condition.Path.String())
+		assert.Len(t, condition.Path.Segments, 2)
+		assert.Equal(t, dsl.SegmentWildcard, condition.Path.Segments[1].Type)
+	})
+
+	t.Run("Nested array field parsing", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("@items[].price>100")
+		require.NoError(t, err)
+
+		filterStage := pipe.Stages[0].(*dsl.FilterStage)
+		condition := filterStage.Conditions[0]
+
+		assert.Equal(t, "items[].price", condition.Path.String())
+		assert.Len(t, condition.Path.Segments, 3)
+		assert.Equal(t, dsl.SegmentField, condition.Path.Segments[0].Type)
+		assert.Equal(t, dsl.SegmentWildcard, condition.Path.Segments[1].Type)
+		assert.Equal(t, dsl.SegmentField, condition.Path.Segments[2].Type)
+	})
+
+	t.Run("Sort with nested path", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("sort -user.score")
+		require.NoError(t, err)
+
+		sortStage := pipe.Stages[0].(*dsl.SortStage)
+		assert.Equal(t, "user.score", sortStage.Fields[0].Path.String())
+		assert.True(t, sortStage.Fields[0].Descending)
+	})
+
+	t.Run("Select with nested paths", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("select user.name user.email")
+		require.NoError(t, err)
+
+		transformStage := pipe.Stages[0].(*dsl.TransformStage)
+		assert.Equal(t, "user.name", transformStage.Fields[0].Source.String())
+		assert.Equal(t, "user.email", transformStage.Fields[1].Source.String())
+	})
+
+	t.Run("Aggregate with nested path", func(t *testing.T) {
+		pipe, err := dsl.ParseExpression("avg items[].price")
+		require.NoError(t, err)
+
+		aggStage := pipe.Stages[0].(*dsl.AggregateStage)
+		assert.Equal(t, "items[].price", aggStage.Field.String())
+	})
 }
 
 func TestComplexPipeline(t *testing.T) {

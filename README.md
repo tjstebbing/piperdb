@@ -99,9 +99,30 @@ Multiple filters in the same stage are combined with implicit AND:
 | `max` | `max field` | Maximum value |
 | `group-by` | `group-by field` | Group items by field value |
 
-### Field Names
+### Field Paths
 
 Field names are identifiers that may contain letters, digits, underscores, and hyphens (e.g. `price`, `first_name`, `item-count`). They are case-sensitive and correspond to keys in the stored JSON data.
+
+PiperDB supports **nested field access** using dot notation and bracket syntax for arrays:
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `field` | Top-level field | `@price>100` |
+| `field.nested` | Nested object field | `@user.profile.name=Alice` |
+| `field[N]` | Array element by index | `@tags[0]=golang` |
+| `field[]` | Any array element (wildcard) | `@tags[]=golang` |
+| `field[].nested` | Field within array elements | `@items[].price>100` |
+
+Nested paths work everywhere — filters, sort, select, map, and aggregations:
+
+```bash
+@user.address.city=Sydney            # filter by nested field
+@items[].status=shipped              # any item's status is shipped
+sort -user.score                     # sort by nested field
+select user.name user.email          # extract nested fields
+avg items[].price                    # aggregate across array elements
+map {user.profile.name: username}    # rename nested field in output
+```
 
 ---
 

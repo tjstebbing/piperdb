@@ -157,15 +157,63 @@ func (e *Executor) evaluateFilterConditions(item map[string]interface{}, conditi
 	}
 }
 
+// resolveFieldPath resolves a field path to all matching values in the item
+func resolveFieldPath(data interface{}, path FieldPath) ([]interface{}, bool) {
+	if path.IsEmpty() {
+		return nil, false
+	}
+
+	current := []interface{}{data}
+
+	for _, seg := range path.Segments {
+		var next []interface{}
+		for _, val := range current {
+			switch seg.Type {
+			case SegmentField:
+				if m, ok := val.(map[string]interface{}); ok {
+					if v, exists := m[seg.Name]; exists {
+						next = append(next, v)
+					}
+				}
+			case SegmentIndex:
+				if arr, ok := val.([]interface{}); ok {
+					if seg.Index >= 0 && seg.Index < len(arr) {
+						next = append(next, arr[seg.Index])
+					}
+				}
+			case SegmentWildcard:
+				if arr, ok := val.([]interface{}); ok {
+					next = append(next, arr...)
+				}
+			}
+		}
+		if len(next) == 0 {
+			return nil, false
+		}
+		current = next
+	}
+
+	return current, true
+}
+
+// resolveFieldPathSingle resolves a field path to a single value (first match)
+func resolveFieldPathSingle(data interface{}, path FieldPath) (interface{}, bool) {
+	values, ok := resolveFieldPath(data, path)
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	return values[0], true
+}
+
 // evaluateFilterCondition evaluates a single filter condition
 func (e *Executor) evaluateFilterCondition(item map[string]interface{}, condition FilterCondition) bool {
-	// Text search (empty field)
-	if condition.Field == "" {
+	// Text search (empty path)
+	if condition.Path.IsEmpty() {
 		return e.evaluateTextSearch(item, condition)
 	}
 	
-	// Field-based filtering
-	fieldValue, exists := item[condition.Field]
+	// Resolve field path
+	values, exists := resolveFieldPath(item, condition.Path)
 	
 	// Handle field existence check
 	if condition.Operator == OpExists {
@@ -176,7 +224,13 @@ func (e *Executor) evaluateFilterCondition(item map[string]interface{}, conditio
 		return false
 	}
 	
-	return e.compareValues(fieldValue, condition.Operator, condition.Value)
+	// For wildcard paths (multiple values), match if ANY value satisfies
+	for _, val := range values {
+		if e.compareValues(val, condition.Operator, condition.Value) {
+			return true
+		}
+	}
+	return false
 }
 
 // evaluateTextSearch performs full-text search across all string fields
@@ -353,7 +407,7 @@ func (e *Executor) mapTransform(item map[string]interface{}, fields []FieldSpec)
 	result := make(map[string]interface{})
 	
 	for _, field := range fields {
-		if value, exists := item[field.Source]; exists {
+		if value, exists := resolveFieldPathSingle(item, field.Source); exists {
 			result[field.Target] = value
 		}
 	}
@@ -366,8 +420,8 @@ func (e *Executor) selectTransform(item map[string]interface{}, fields []FieldSp
 	result := make(map[string]interface{})
 	
 	for _, field := range fields {
-		if value, exists := item[field.Source]; exists {
-			result[field.Source] = value
+		if value, exists := resolveFieldPathSingle(item, field.Source); exists {
+			result[field.Target] = value
 		}
 	}
 	
@@ -381,8 +435,8 @@ func (e *Executor) pluckTransform(item map[string]interface{}, fields []FieldSpe
 	}
 	
 	field := fields[0]
-	if value, exists := item[field.Source]; exists {
-		return map[string]interface{}{field.Source: value}, nil
+	if value, exists := resolveFieldPathSingle(item, field.Source); exists {
+		return map[string]interface{}{field.Target: value}, nil
 	}
 	
 	return make(map[string]interface{}), nil
@@ -404,8 +458,8 @@ func (e *Executor) executeSortStage(execCtx *ExecutionContext, stage *SortStage)
 // compareItems compares two items for sorting
 func (e *Executor) compareItems(a, b map[string]interface{}, sortFields []SortField) bool {
 	for _, field := range sortFields {
-		aVal, aExists := a[field.Field]
-		bVal, bExists := b[field.Field]
+		aVal, aExists := resolveFieldPathSingle(a, field.Path)
+		bVal, bExists := resolveFieldPathSingle(b, field.Path)
 		
 		// Handle missing values
 		if !aExists && !bExists {
@@ -481,30 +535,30 @@ func (e *Executor) executeCount(execCtx *ExecutionContext) error {
 }
 
 // executeSum sums numeric values in a field
-func (e *Executor) executeSum(execCtx *ExecutionContext, field string) error {
+func (e *Executor) executeSum(execCtx *ExecutionContext, field FieldPath) error {
 	sum := 0.0
 	count := 0
 	
 	for _, item := range execCtx.Items {
-		if value, exists := item[field]; exists && e.isNumeric(value) {
+		if value, exists := resolveFieldPathSingle(item, field); exists && e.isNumeric(value) {
 			sum += e.toFloat64(value)
 			count++
 		}
 	}
 	
 	execCtx.Items = []map[string]interface{}{
-		{"sum": sum, "field": field, "count": count},
+		{"sum": sum, "field": field.String(), "count": count},
 	}
 	return nil
 }
 
 // executeAvg calculates average of numeric values
-func (e *Executor) executeAvg(execCtx *ExecutionContext, field string) error {
+func (e *Executor) executeAvg(execCtx *ExecutionContext, field FieldPath) error {
 	sum := 0.0
 	count := 0
 	
 	for _, item := range execCtx.Items {
-		if value, exists := item[field]; exists && e.isNumeric(value) {
+		if value, exists := resolveFieldPathSingle(item, field); exists && e.isNumeric(value) {
 			sum += e.toFloat64(value)
 			count++
 		}
@@ -516,18 +570,18 @@ func (e *Executor) executeAvg(execCtx *ExecutionContext, field string) error {
 	}
 	
 	execCtx.Items = []map[string]interface{}{
-		{"avg": avg, "field": field, "count": count},
+		{"avg": avg, "field": field.String(), "count": count},
 	}
 	return nil
 }
 
 // executeMin finds minimum value
-func (e *Executor) executeMin(execCtx *ExecutionContext, field string) error {
+func (e *Executor) executeMin(execCtx *ExecutionContext, field FieldPath) error {
 	var min interface{}
 	found := false
 	
 	for _, item := range execCtx.Items {
-		if value, exists := item[field]; exists {
+		if value, exists := resolveFieldPathSingle(item, field); exists {
 			if !found || e.compareForSort(value, min) < 0 {
 				min = value
 				found = true
@@ -535,7 +589,7 @@ func (e *Executor) executeMin(execCtx *ExecutionContext, field string) error {
 		}
 	}
 	
-	result := map[string]interface{}{"field": field}
+	result := map[string]interface{}{"field": field.String()}
 	if found {
 		result["min"] = min
 	} else {
@@ -547,12 +601,12 @@ func (e *Executor) executeMin(execCtx *ExecutionContext, field string) error {
 }
 
 // executeMax finds maximum value
-func (e *Executor) executeMax(execCtx *ExecutionContext, field string) error {
+func (e *Executor) executeMax(execCtx *ExecutionContext, field FieldPath) error {
 	var max interface{}
 	found := false
 	
 	for _, item := range execCtx.Items {
-		if value, exists := item[field]; exists {
+		if value, exists := resolveFieldPathSingle(item, field); exists {
 			if !found || e.compareForSort(value, max) > 0 {
 				max = value
 				found = true
@@ -560,7 +614,7 @@ func (e *Executor) executeMax(execCtx *ExecutionContext, field string) error {
 		}
 	}
 	
-	result := map[string]interface{}{"field": field}
+	result := map[string]interface{}{"field": field.String()}
 	if found {
 		result["max"] = max
 	} else {
@@ -572,7 +626,7 @@ func (e *Executor) executeMax(execCtx *ExecutionContext, field string) error {
 }
 
 // executeGroupBy groups items by specified fields
-func (e *Executor) executeGroupBy(execCtx *ExecutionContext, groupFields []string) error {
+func (e *Executor) executeGroupBy(execCtx *ExecutionContext, groupFields []FieldPath) error {
 	groups := make(map[string][]map[string]interface{})
 	
 	for _, item := range execCtx.Items {
@@ -595,11 +649,11 @@ func (e *Executor) executeGroupBy(execCtx *ExecutionContext, groupFields []strin
 }
 
 // buildGroupKey builds a key for grouping
-func (e *Executor) buildGroupKey(item map[string]interface{}, fields []string) string {
+func (e *Executor) buildGroupKey(item map[string]interface{}, fields []FieldPath) string {
 	var keyParts []string
 	
 	for _, field := range fields {
-		if value, exists := item[field]; exists {
+		if value, exists := resolveFieldPathSingle(item, field); exists {
 			keyParts = append(keyParts, fmt.Sprintf("%v", value))
 		} else {
 			keyParts = append(keyParts, "<null>")

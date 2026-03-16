@@ -50,6 +50,8 @@ const (
 	// Symbols
 	LBRACE     // {
 	RBRACE     // }
+	LBRACKET   // [
+	RBRACKET   // ]
 	LPAREN     // (
 	RPAREN     // )
 	COMMA      // ,
@@ -149,6 +151,10 @@ func (tt TokenType) String() string {
 		return "{"
 	case RBRACE:
 		return "}"
+	case LBRACKET:
+		return "["
+	case RBRACKET:
+		return "]"
 	case LPAREN:
 		return "("
 	case RPAREN:
