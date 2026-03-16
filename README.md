@@ -338,13 +338,17 @@ PiperDB's query language is designed to be intuitive yet powerful. Here are comp
 
 ```
 piperdb/
-├── cmd/piperdb/         # CLI interface and tools
+├── cmd/
+│   ├── piperdb/         # CLI tool
+│   └── piperd/          # HTTP daemon
 ├── internal/
 │   ├── dsl/            # Query language parser & executor
 │   │   ├── lexer.go    # Tokenization
 │   │   ├── parser.go   # AST generation  
 │   │   ├── ast.go      # AST node definitions
 │   │   └── executor.go # Query execution engine
+│   ├── server/         # REST API server
+│   │   └── server.go   # Routes and handlers
 │   └── storage/        # BoltDB-based storage layer
 │       ├── bolt_storage.go  # Main storage implementation
 │       ├── schema_cache.go  # Schema caching
@@ -354,6 +358,126 @@ piperdb/
 │   ├── types/          # Core data structures
 │   └── config/         # Configuration management
 └── test/               # Tests and benchmarks
+```
+
+## 🌐 Daemon Mode
+
+PiperDB ships a standalone HTTP daemon (`piperd`) that exposes the full feature set as a REST API. Zero external dependencies — built on Go's standard library `net/http`.
+
+### Starting the Daemon
+
+```bash
+# Build and run
+go build ./cmd/piperd
+./piperd                                    # default: :8080, ./data
+./piperd -addr :3000 -data-dir /var/lib/piperdb
+
+# Or with environment variable
+PIPERDB_DATA_DIR=/var/lib/piperdb ./piperd -addr :3000
+```
+
+### REST API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/lists` | Create a list |
+| `GET` | `/lists` | List all lists |
+| `GET` | `/lists/{id}` | Get list info |
+| `DELETE` | `/lists/{id}` | Delete a list |
+| `GET` | `/lists/{id}/schema` | Get inferred schema |
+| `GET` | `/lists/{id}/stats` | Get list statistics |
+| `POST` | `/lists/{id}/items` | Add item(s) |
+| `GET` | `/lists/{id}/items` | Get items (`?limit=N&offset=N`) |
+| `GET` | `/lists/{id}/items/{itemId}` | Get single item |
+| `PUT` | `/lists/{id}/items/{itemId}` | Update item |
+| `DELETE` | `/lists/{id}/items/{itemId}` | Delete item |
+| `POST` | `/lists/{id}/query` | Execute pipe query |
+| `POST` | `/query/validate` | Validate pipe syntax |
+
+### curl Examples
+
+#### Managing Lists
+
+```bash
+# Create a list
+curl -X POST localhost:8080/lists -d '{"id": "products"}'
+
+# List all lists
+curl localhost:8080/lists
+
+# Get list info
+curl localhost:8080/lists/products
+
+# Delete a list
+curl -X DELETE localhost:8080/lists/products
+```
+
+#### Adding and Retrieving Items
+
+```bash
+# Add a single item
+curl -X POST localhost:8080/lists/products/items \
+  -d '{"name": "iPhone", "price": 999, "brand": "Apple", "tags": ["phone", "5g"]}'
+
+# Add multiple items at once
+curl -X POST localhost:8080/lists/products/items -d '[
+  {"name": "MacBook", "price": 2499, "brand": "Apple", "tags": ["laptop"]},
+  {"name": "Pixel", "price": 699, "brand": "Google", "tags": ["phone", "android"]}
+]'
+
+# Get items with pagination
+curl "localhost:8080/lists/products/items?limit=10&offset=0"
+
+# Get a single item by ID
+curl localhost:8080/lists/products/items/369b94a5-4b8f-4b2e-9001-606e6926f1b1
+
+# Update an item
+curl -X PUT localhost:8080/lists/products/items/369b94a5-... \
+  -d '{"name": "iPhone 16", "price": 1099, "brand": "Apple"}'
+
+# Delete an item
+curl -X DELETE localhost:8080/lists/products/items/369b94a5-...
+```
+
+#### Querying with the DSL
+
+Pipe expressions are sent in a JSON body to avoid URL-encoding issues with `@`, `>`, `|`, `[]` etc.
+
+```bash
+# Filter and sort
+curl -X POST localhost:8080/lists/products/query \
+  -d '{"pipe": "@price<1000 | sort price"}'
+
+# Nested field access
+curl -X POST localhost:8080/lists/products/query \
+  -d '{"pipe": "@user.profile.city=Sydney"}'
+
+# Array wildcard — find items where any tag is "phone"
+curl -X POST localhost:8080/lists/products/query \
+  -d '{"pipe": "@tags[]=phone"}'
+
+# Complex pipeline
+curl -X POST localhost:8080/lists/products/query \
+  -d '{"pipe": "@price>500 @brand=Apple | sort -price | select name price | take 5"}'
+
+# Aggregation
+curl -X POST localhost:8080/lists/products/query \
+  -d '{"pipe": "avg price"}'
+
+# Validate syntax without executing
+curl -X POST localhost:8080/query/validate \
+  -d '{"pipe": "@price<100 | sort -price"}'
+# → {"valid": true}
+```
+
+#### Schema and Statistics
+
+```bash
+# View inferred schema
+curl localhost:8080/lists/products/schema
+
+# View list statistics
+curl localhost:8080/lists/products/stats
 ```
 
 ## ⚡ Performance
