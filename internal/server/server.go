@@ -46,6 +46,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /lists/{id}/items/{itemId}", s.updateItem)
 	s.mux.HandleFunc("DELETE /lists/{id}/items/{itemId}", s.deleteItem)
 
+	// Indexes
+	s.mux.HandleFunc("POST /lists/{id}/indexes", s.createIndex)
+	s.mux.HandleFunc("GET /lists/{id}/indexes", s.listIndexes)
+	s.mux.HandleFunc("DELETE /lists/{id}/indexes/{field}", s.dropIndex)
+
 	// Query
 	s.mux.HandleFunc("POST /lists/{id}/query", s.query)
 	s.mux.HandleFunc("POST /query/validate", s.validateQuery)
@@ -268,6 +273,62 @@ func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
 	itemId := r.PathValue("itemId")
 
 	if err := s.db.DeleteItem(r.Context(), id, itemId); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Index handlers ---
+
+func (s *Server) createIndex(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req struct {
+		Field     string `json:"field"`
+		IndexType string `json:"type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Field == "" {
+		writeError(w, http.StatusBadRequest, "field is required")
+		return
+	}
+	if req.IndexType == "" {
+		req.IndexType = "btree"
+	}
+
+	if err := s.db.CreateIndex(r.Context(), id, req.Field, req.IndexType); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"field": req.Field, "type": req.IndexType})
+}
+
+func (s *Server) listIndexes(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	indexes, err := s.db.ListIndexes(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if indexes == nil {
+		indexes = []*types.IndexInfo{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"indexes": indexes})
+}
+
+func (s *Server) dropIndex(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	field := r.PathValue("field")
+
+	if err := s.db.DropIndex(r.Context(), id, field); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}

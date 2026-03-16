@@ -100,25 +100,11 @@ func (db *piperDB) AddItem(ctx context.Context, listID string, data map[string]i
 	return itemID, err
 }
 
-// AddItems adds multiple items to a list in batch
+// AddItems adds multiple items to a list in a single transaction
 func (db *piperDB) AddItems(ctx context.Context, listID string, items []map[string]interface{}) ([]string, error) {
 	start := time.Now()
-	var itemIDs []string
-	var err error
-	
-	// For now, implement as sequential adds
-	// TODO: Optimize with batch operations
-	for _, item := range items {
-		itemID, addErr := db.storage.AddItem(ctx, listID, item)
-		if addErr != nil {
-			err = addErr
-			break
-		}
-		itemIDs = append(itemIDs, itemID)
-	}
-	
+	itemIDs, err := db.storage.AddItems(ctx, listID, items)
 	db.recordOperation("AddItems", time.Since(start), err)
-	
 	return itemIDs, err
 }
 
@@ -230,31 +216,30 @@ func (db *piperDB) ResetSchema(ctx context.Context, listID string) error {
 	return err
 }
 
-// CreateIndex creates an index for a field (placeholder)
+// CreateIndex creates an index for a field
 func (db *piperDB) CreateIndex(ctx context.Context, listID, field, indexType string) error {
 	start := time.Now()
-	err := fmt.Errorf("CreateIndex not implemented yet")
+	err := db.storage.CreateIndex(ctx, listID, field, indexType)
 	
 	db.recordOperation("CreateIndex", time.Since(start), err)
 	
 	return err
 }
 
-// DropIndex removes an index (placeholder)
+// DropIndex removes an index
 func (db *piperDB) DropIndex(ctx context.Context, listID, field string) error {
 	start := time.Now()
-	err := fmt.Errorf("DropIndex not implemented yet")
+	err := db.storage.DropIndex(ctx, listID, field)
 	
 	db.recordOperation("DropIndex", time.Since(start), err)
 	
 	return err
 }
 
-// ListIndexes returns all indexes for a list (placeholder)
+// ListIndexes returns all indexes for a list
 func (db *piperDB) ListIndexes(ctx context.Context, listID string) ([]*types.IndexInfo, error) {
 	start := time.Now()
-	indexes := []*types.IndexInfo{}
-	var err error
+	indexes, err := db.storage.ListIndexes(ctx, listID)
 	
 	db.recordOperation("ListIndexes", time.Since(start), err)
 	

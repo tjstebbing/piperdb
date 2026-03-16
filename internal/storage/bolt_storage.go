@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -61,7 +62,23 @@ func NewBoltStorage(path string) (*BoltStorage, error) {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
+	// Load existing indexes for all lists
+	if err := storage.loadAllIndexes(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to load indexes: %w", err)
+	}
+
 	return storage, nil
+}
+
+// loadAllIndexes loads index metadata for all lists on startup
+func (bs *BoltStorage) loadAllIndexes() error {
+	return bs.db.View(func(tx *bbolt.Tx) error {
+		listsBucket := tx.Bucket([]byte(ListsBucket))
+		return listsBucket.ForEach(func(k, v []byte) error {
+			return bs.indexManager.LoadIndexes(tx, string(k))
+		})
+	})
 }
 
 // initDatabase creates the initial bucket structure
@@ -271,6 +288,9 @@ func (bs *BoltStorage) AddItem(ctx context.Context, listID string, data map[stri
 			return err
 		}
 
+		// Maintain indexes
+		bs.updateIndexesForItem(tx, listID, itemID, data)
+
 		// Update schema if needed
 		if err := bs.updateSchemaForItem(tx, listID, data); err != nil {
 			return fmt.Errorf("failed to update schema: %w", err)
@@ -279,6 +299,99 @@ func (bs *BoltStorage) AddItem(ctx context.Context, listID string, data map[stri
 		// Update list stats
 		return bs.updateListStats(tx, listID)
 	})
+}
+
+// AddItems adds multiple items in a single transaction (one fsync).
+func (bs *BoltStorage) AddItems(ctx context.Context, listID string, items []map[string]interface{}) ([]string, error) {
+	itemIDs := make([]string, len(items))
+	for i := range items {
+		itemIDs[i] = uuid.New().String()
+	}
+
+	now := time.Now()
+
+	err := bs.db.Update(func(tx *bbolt.Tx) error {
+		itemsBucket := tx.Bucket([]byte(listID + ItemsSuffix))
+		if itemsBucket == nil {
+			return fmt.Errorf("list %s not found", listID)
+		}
+
+		position := bs.getNextPosition(itemsBucket)
+
+		for i, data := range items {
+			storedItem := &StoredItem{
+				ID:       itemIDs[i],
+				Position: position,
+				Data:     data,
+				Hash:     hashData(data),
+				Created:  now,
+				Updated:  now,
+			}
+			position++
+
+			itemJSON, err := json.Marshal(storedItem)
+			if err != nil {
+				return fmt.Errorf("failed to marshal item %d: %w", i, err)
+			}
+
+			if err := itemsBucket.Put([]byte(itemIDs[i]), itemJSON); err != nil {
+				return err
+			}
+
+			bs.updateIndexesForItem(tx, listID, itemIDs[i], data)
+		}
+
+		// Update schema once for the whole batch
+		if err := bs.updateSchemaForBatch(tx, listID, items); err != nil {
+			return fmt.Errorf("failed to update schema: %w", err)
+		}
+
+		return bs.updateListStats(tx, listID)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return itemIDs, nil
+}
+
+// updateSchemaForBatch updates the schema once for a batch of items.
+func (bs *BoltStorage) updateSchemaForBatch(tx *bbolt.Tx, listID string, items []map[string]interface{}) error {
+	schema, err := bs.getSchemaFromTx(tx, listID)
+	if err != nil {
+		return err
+	}
+
+	itemsBucket := tx.Bucket([]byte(listID + ItemsSuffix))
+	totalItems := int64(0)
+	if itemsBucket != nil {
+		totalItems = int64(itemsBucket.Stats().KeyN)
+	}
+
+	for _, data := range items {
+		for fieldName, value := range data {
+			if _, exists := schema.Fields[fieldName]; !exists {
+				schema.Fields[fieldName] = &types.FieldDef{
+					Type:        inferFieldType(value),
+					Required:    false,
+					SeenInCount: 1,
+					TotalItems:  totalItems,
+				}
+			} else {
+				schema.Fields[fieldName].SeenInCount++
+				schema.Fields[fieldName].TotalItems = totalItems
+			}
+		}
+	}
+
+	for _, field := range schema.Fields {
+		field.TotalItems = totalItems
+	}
+
+	schema.Version++
+	schema.UpdatedAt = time.Now()
+
+	return bs.saveSchemaToTx(tx, listID, schema)
 }
 
 // UpdateItem updates an existing item
@@ -300,6 +413,9 @@ func (bs *BoltStorage) UpdateItem(ctx context.Context, listID, itemID string, da
 			return fmt.Errorf("failed to unmarshal item: %w", err)
 		}
 
+		// Remove old index entries, add new ones
+		bs.removeIndexesForItem(tx, listID, itemID, storedItem.Data)
+
 		// Update item data
 		storedItem.Data = data
 		storedItem.Hash = hashData(data)
@@ -315,6 +431,9 @@ func (bs *BoltStorage) UpdateItem(ctx context.Context, listID, itemID string, da
 			return err
 		}
 
+		// Add new index entries
+		bs.updateIndexesForItem(tx, listID, itemID, data)
+
 		// Update schema if needed
 		return bs.updateSchemaForItem(tx, listID, data)
 	})
@@ -326,6 +445,15 @@ func (bs *BoltStorage) DeleteItem(ctx context.Context, listID, itemID string) er
 		itemsBucket := tx.Bucket([]byte(listID + ItemsSuffix))
 		if itemsBucket == nil {
 			return fmt.Errorf("list %s not found", listID)
+		}
+
+		// Remove index entries before deleting
+		existingData := itemsBucket.Get([]byte(itemID))
+		if existingData != nil {
+			var storedItem StoredItem
+			if err := json.Unmarshal(existingData, &storedItem); err == nil {
+				bs.removeIndexesForItem(tx, listID, itemID, storedItem.Data)
+			}
 		}
 
 		if err := itemsBucket.Delete([]byte(itemID)); err != nil {
@@ -655,6 +783,245 @@ func (bs *BoltStorage) GetSchema(ctx context.Context, listID string) (*types.Sch
 	bs.schemaCache.Set(listID, schema)
 
 	return schema, nil
+}
+
+// --- Index operations ---
+
+// CreateIndex creates an index for a field in a list
+func (bs *BoltStorage) CreateIndex(ctx context.Context, listID, field, indexType string) error {
+	return bs.db.Update(func(tx *bbolt.Tx) error {
+		return bs.indexManager.CreateIndex(tx, listID, field, indexType)
+	})
+}
+
+// DropIndex removes an index for a field
+func (bs *BoltStorage) DropIndex(ctx context.Context, listID, field string) error {
+	return bs.db.Update(func(tx *bbolt.Tx) error {
+		return bs.indexManager.DropIndex(tx, listID, field)
+	})
+}
+
+// ListIndexes returns all indexes for a list
+func (bs *BoltStorage) ListIndexes(ctx context.Context, listID string) ([]*types.IndexInfo, error) {
+	return bs.indexManager.ListIndexes(listID)
+}
+
+// HasIndex checks if a field has an index
+func (bs *BoltStorage) HasIndex(listID, field string) bool {
+	return bs.indexManager.HasIndex(listID, field)
+}
+
+// IndexEstimate returns the number of index entries matching a value and the total
+// item count, without deserializing any items. Used by the query planner to decide
+// whether an index scan is worthwhile. Stops counting early once it's clear the
+// match ratio exceeds the planner's selectivity threshold.
+func (bs *BoltStorage) IndexEstimate(ctx context.Context, listID, field string, value interface{}) (matches, total int64, err error) {
+	err = bs.db.View(func(tx *bbolt.Tx) error {
+		itemsBucket := tx.Bucket([]byte(listID + ItemsSuffix))
+		if itemsBucket == nil {
+			return fmt.Errorf("list %s not found", listID)
+		}
+		total = int64(itemsBucket.Stats().KeyN)
+
+		indexesBucket := tx.Bucket([]byte(listID + IndexesSuffix))
+		if indexesBucket == nil {
+			return fmt.Errorf("no indexes for list %s", listID)
+		}
+		indexBucket := indexesBucket.Bucket([]byte(field))
+		if indexBucket == nil {
+			return fmt.Errorf("no index for field %s", field)
+		}
+
+		// Stop counting early once matches exceed 5% of total — the caller
+		// will reject the index at that point anyway.
+		cutoff := total/20 + 1
+
+		prefix := []byte(fmt.Sprintf("%v#", value))
+		c := indexBucket.Cursor()
+		for k, _ := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, _ = c.Next() {
+			matches++
+			if matches > cutoff {
+				break
+			}
+		}
+		return nil
+	})
+	return
+}
+
+// IndexLookup uses an index to find items matching a field=value equality condition.
+// It collects matching item IDs from the index, sorts them to align with BoltDB's
+// key order, then fetches items via a sequential cursor walk. This avoids the cost
+// of random B-tree traversals that individual Get() calls incur at scale.
+func (bs *BoltStorage) IndexLookup(ctx context.Context, listID, field string, value interface{}) ([]map[string]interface{}, error) {
+	var items []map[string]interface{}
+
+	err := bs.db.View(func(tx *bbolt.Tx) error {
+		indexesBucket := tx.Bucket([]byte(listID + IndexesSuffix))
+		if indexesBucket == nil {
+			return fmt.Errorf("no indexes for list %s", listID)
+		}
+
+		indexBucket := indexesBucket.Bucket([]byte(field))
+		if indexBucket == nil {
+			return fmt.Errorf("no index for field %s", field)
+		}
+
+		itemsBucket := tx.Bucket([]byte(listID + ItemsSuffix))
+		if itemsBucket == nil {
+			return fmt.Errorf("list %s not found", listID)
+		}
+
+		// Phase 1: collect matching item IDs from the index
+		prefix := []byte(fmt.Sprintf("%v#", value))
+		var itemIDs []string
+		c := indexBucket.Cursor()
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			itemIDs = append(itemIDs, string(v))
+		}
+
+		if len(itemIDs) == 0 {
+			return nil
+		}
+
+		// Phase 2: sort IDs so fetches follow BoltDB's key order (sequential page access)
+		sort.Strings(itemIDs)
+
+		// Phase 3: walk the items bucket cursor in sorted key order
+		items = make([]map[string]interface{}, 0, len(itemIDs))
+		ic := itemsBucket.Cursor()
+		for _, id := range itemIDs {
+			k, v := ic.Seek([]byte(id))
+			if k == nil || string(k) != id {
+				continue
+			}
+			var storedItem StoredItem
+			if err := json.Unmarshal(v, &storedItem); err != nil {
+				continue
+			}
+			items = append(items, storedItem.Data)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	bs.indexManager.RecordIndexHit(listID, field)
+	return items, nil
+}
+
+// IndexLookupIDs returns sorted item IDs matching a field=value equality condition
+// without deserializing any items. Used for multi-index intersection.
+func (bs *BoltStorage) IndexLookupIDs(ctx context.Context, listID, field string, value interface{}) ([]string, error) {
+	var ids []string
+
+	err := bs.db.View(func(tx *bbolt.Tx) error {
+		indexesBucket := tx.Bucket([]byte(listID + IndexesSuffix))
+		if indexesBucket == nil {
+			return fmt.Errorf("no indexes for list %s", listID)
+		}
+		indexBucket := indexesBucket.Bucket([]byte(field))
+		if indexBucket == nil {
+			return fmt.Errorf("no index for field %s", field)
+		}
+
+		prefix := []byte(fmt.Sprintf("%v#", value))
+		c := indexBucket.Cursor()
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			ids = append(ids, string(v))
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// FetchItemsByIDs fetches items by a pre-sorted list of IDs using a sequential
+// cursor walk for optimal page access patterns.
+func (bs *BoltStorage) FetchItemsByIDs(ctx context.Context, listID string, ids []string) ([]map[string]interface{}, error) {
+	var items []map[string]interface{}
+
+	err := bs.db.View(func(tx *bbolt.Tx) error {
+		itemsBucket := tx.Bucket([]byte(listID + ItemsSuffix))
+		if itemsBucket == nil {
+			return fmt.Errorf("list %s not found", listID)
+		}
+
+		items = make([]map[string]interface{}, 0, len(ids))
+		c := itemsBucket.Cursor()
+		for _, id := range ids {
+			k, v := c.Seek([]byte(id))
+			if k == nil || string(k) != id {
+				continue
+			}
+			var storedItem StoredItem
+			if err := json.Unmarshal(v, &storedItem); err != nil {
+				continue
+			}
+			items = append(items, storedItem.Data)
+		}
+		return nil
+	})
+
+	return items, err
+}
+
+// updateIndexesForItem adds index entries for a new/updated item
+func (bs *BoltStorage) updateIndexesForItem(tx *bbolt.Tx, listID, itemID string, data map[string]interface{}) {
+	indexes, _ := bs.indexManager.ListIndexes(listID)
+	if len(indexes) == 0 {
+		return
+	}
+
+	indexesBucket := tx.Bucket([]byte(listID + IndexesSuffix))
+	if indexesBucket == nil {
+		return
+	}
+
+	for _, idx := range indexes {
+		indexBucket := indexesBucket.Bucket([]byte(idx.FieldName))
+		if indexBucket == nil {
+			continue
+		}
+
+		if value, exists := data[idx.FieldName]; exists {
+			key := []byte(fmt.Sprintf("%v#%s", value, itemID))
+			indexBucket.Put(key, []byte(itemID))
+		}
+	}
+}
+
+// removeIndexesForItem removes index entries for a deleted/updated item
+func (bs *BoltStorage) removeIndexesForItem(tx *bbolt.Tx, listID, itemID string, data map[string]interface{}) {
+	indexes, _ := bs.indexManager.ListIndexes(listID)
+	if len(indexes) == 0 {
+		return
+	}
+
+	indexesBucket := tx.Bucket([]byte(listID + IndexesSuffix))
+	if indexesBucket == nil {
+		return
+	}
+
+	for _, idx := range indexes {
+		indexBucket := indexesBucket.Bucket([]byte(idx.FieldName))
+		if indexBucket == nil {
+			continue
+		}
+
+		if value, exists := data[idx.FieldName]; exists {
+			key := []byte(fmt.Sprintf("%v#%s", value, itemID))
+			indexBucket.Delete(key)
+		}
+	}
 }
 
 // Close closes the database

@@ -482,26 +482,46 @@ curl localhost:8080/lists/products/stats
 
 ## ⚡ Performance
 
-### Benchmarks (MacBook Pro M2)
+### Index vs Sequential Scan (Apple M4)
 
-| Operation | Time | Throughput |
-|-----------|------|------------|
-| Simple filter | < 1ms | 100K+ ops/sec |
-| Complex pipeline | < 10ms | 10K+ ops/sec |
-| Text search | < 5ms | 20K+ ops/sec |
-| Aggregation | < 15ms | 5K+ ops/sec |
-| Item insert | < 100μs | 10K+ items/sec |
+Benchmarked with synthetic product data (10 brands × 10 categories × 4 statuses, varied prices/ratings). Indexes are equality-only on `brand`, `category`, and `status`. Times are per-query averages over 200 iterations.
 
-### Real Query Performance
+#### 1,000 items
+
+| Query | Sequential | Indexed | Speedup |
+|-------|-----------|---------|---------|
+| `@brand=Apple` | 2.6ms | 289μs | **9.0×** |
+| `@brand=Apple @category=phone` | 2.7ms | 305μs | **8.8×** |
+| `@brand=Samsung \| sort -price \| take 10` | 2.6ms | 272μs | **9.7×** |
+| `@brand=Apple \| count` | 2.6ms | 291μs | **9.1×** |
+| `@price>1000 @price<2000` (range, no index) | 2.6ms | — | — |
+| `sort -price` (full sort) | 3.3ms | — | — |
+
+#### 10,000 items
+
+| Query | Sequential | Indexed | Speedup |
+|-------|-----------|---------|---------|
+| `@brand=Apple` | 2.6ms | 2.6ms | 1.0× |
+| `@brand=Apple @category=phone` | 2.7ms | 2.7ms | 1.0× |
+| `@brand=Samsung \| sort -price \| take 10` | 2.7ms | 3.3ms | 0.8× |
+| `@brand=Apple \| count` | 2.7ms | 2.6ms | 1.0× |
+| `@price>1000 @price<2000` (range) | 2.6ms | — | — |
+| `sort -price` (full sort) | 3.3ms | — | — |
+
+**Key observations:**
+- At 1k items, indexes deliver **~9× speedup** by avoiding the full-table scan.
+- At 10k items, index benefit flattens because the index returns ~1k matching items (1/10 selectivity), each requiring individual BoltDB deserialization — approaching full-scan cost.
+- Sequential scan time is dominated by BoltDB read-transaction overhead, not item count — 1k and 10k scan in similar time (~2.6ms).
+- Indexes are most effective with **high selectivity** (few matches relative to total items).
+
+### Running Benchmarks
+
 ```bash
-$ ./piperdb query products '@price<1000 | sort price'
-# Results (1 items, took 570μs)
+# Full performance test with comparison table
+go test -v -run=TestQueryPerformance -timeout=30m ./test/benchmarks/
 
-$ ./piperdb query products '@brand=Apple | count'  
-# Results (1 items, took 321μs)
-
-$ ./piperdb query products 'select name price'
-# Results (2 items, took 295μs)
+# Go benchmarks (1k items, quick)
+go test -bench=. -benchmem ./test/benchmarks/
 ```
 
 ## 🛠️ API Usage
@@ -589,8 +609,11 @@ go test -cover ./...
 go test ./test/integration/ -v
 go test ./test/dsl/ -v
 
-# Benchmark performance
-go test -bench=. ./test/benchmarks/
+# Benchmark performance (quick, 1k items)
+go test -bench=. -benchmem ./test/benchmarks/
+
+# Full index vs sequential comparison (1k + 10k items)
+go test -v -run=TestQueryPerformance -timeout=30m ./test/benchmarks/
 
 # Test DSL parsing
 go test ./internal/dsl/ -v

@@ -21,6 +21,11 @@ type Executor struct {
 type StorageInterface interface {
 	GetItems(ctx context.Context, listID string, opts *types.QueryOptions) (*types.ResultSet, error)
 	GetSchema(ctx context.Context, listID string) (*types.Schema, error)
+	HasIndex(listID, field string) bool
+	IndexEstimate(ctx context.Context, listID, field string, value interface{}) (matches, total int64, err error)
+	IndexLookup(ctx context.Context, listID, field string, value interface{}) ([]map[string]interface{}, error)
+	IndexLookupIDs(ctx context.Context, listID, field string, value interface{}) ([]string, error)
+	FetchItemsByIDs(ctx context.Context, listID string, ids []string) ([]map[string]interface{}, error)
 }
 
 // ExecutionContext holds context for query execution
@@ -30,6 +35,7 @@ type ExecutionContext struct {
 	Items      []map[string]interface{}
 	StartTime  time.Time
 	MemoryUsed int64
+	IndexHits  int64
 }
 
 // NewExecutor creates a new query executor
@@ -40,40 +46,61 @@ func NewExecutor(storage StorageInterface) *Executor {
 // Execute executes a parsed pipe expression
 func (e *Executor) Execute(ctx context.Context, listID string, pipe *PipeExpr, opts *types.QueryOptions) (*types.ResultSet, error) {
 	startTime := time.Now()
-	
-	// Get initial data from storage
-	result, err := e.storage.GetItems(ctx, listID, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get items: %w", err)
-	}
-	
+
 	// Get schema for type information
 	schema, err := e.storage.GetSchema(ctx, listID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema: %w", err)
 	}
-	
+
 	// Create execution context
 	execCtx := &ExecutionContext{
 		ListID:    listID,
 		Schema:    schema,
-		Items:     result.Items,
 		StartTime: startTime,
 	}
-	
-	// Execute each stage
-	for i, stage := range pipe.Stages {
-		err := e.executeStage(ctx, execCtx, stage)
+
+	// Query planning: check if the first stage is a filter with an indexed equality condition
+	planUsed := "sequential"
+	startStage := 0
+
+	if len(pipe.Stages) > 0 {
+		if items, usedIndex, remaining := e.tryIndexScan(ctx, listID, pipe.Stages[0]); usedIndex {
+			execCtx.Items = items
+			execCtx.IndexHits++
+			planUsed = "index"
+			startStage = 1
+			// If the index only resolved some conditions, apply remaining as a filter
+			if remaining != nil {
+				if err := e.executeStage(ctx, execCtx, remaining); err != nil {
+					return nil, fmt.Errorf("stage 1 (post-index filter): %w", err)
+				}
+			}
+		}
+	}
+
+	// Fall back to full scan if no index was used
+	if startStage == 0 {
+		result, err := e.storage.GetItems(ctx, listID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get items: %w", err)
+		}
+		execCtx.Items = result.Items
+	}
+
+	// Execute remaining stages
+	for i := startStage; i < len(pipe.Stages); i++ {
+		err := e.executeStage(ctx, execCtx, pipe.Stages[i])
 		if err != nil {
 			return nil, fmt.Errorf("stage %d: %w", i+1, err)
 		}
-		
+
 		// Apply pagination limits if this is the last stage
 		if i == len(pipe.Stages)-1 && opts != nil {
 			e.applyPagination(execCtx, opts)
 		}
 	}
-	
+
 	// Build result
 	finalResult := &types.ResultSet{
 		Items:      execCtx.Items,
@@ -81,12 +108,185 @@ func (e *Executor) Execute(ctx context.Context, listID string, pipe *PipeExpr, o
 		TotalCount: int64(len(execCtx.Items)),
 		HasMore:    false,
 		QueryTime:  time.Since(startTime),
-		IndexHits:  0, // TODO: Track index usage
+		IndexHits:  execCtx.IndexHits,
 		MemoryUsed: execCtx.MemoryUsed,
-		PlanUsed:   "sequential", // TODO: Add query planning
+		PlanUsed:   planUsed,
 	}
-	
+
 	return finalResult, nil
+}
+
+// indexSelectivityThreshold is the maximum fraction of matching items (matches/total)
+// at or above which the planner skips the index and falls back to sequential scan.
+// At 5% or more, the cost of random-access item lookups approaches a sequential scan.
+const indexSelectivityThreshold = 0.05
+
+// indexedCondition tracks a filter condition that has an available index.
+type indexedCondition struct {
+	index     int   // position in filterStage.Conditions
+	field     string
+	value     interface{}
+	matches   int64
+	total     int64
+}
+
+// tryIndexScan checks if a stage can be resolved via an index lookup.
+// It supports single-index scans and multi-index intersection: when multiple
+// equality conditions have indexes but each individually exceeds the selectivity
+// threshold, their ID sets are intersected to produce a smaller result.
+// Returns the items from the index, whether an index was used, and any
+// remaining filter conditions that still need to be applied.
+func (e *Executor) tryIndexScan(ctx context.Context, listID string, stage Stage) ([]map[string]interface{}, bool, Stage) {
+	filterStage, ok := stage.(*FilterStage)
+	if !ok {
+		return nil, false, nil
+	}
+
+	// Collect all equality conditions that have indexes
+	var candidates []indexedCondition
+	for i, cond := range filterStage.Conditions {
+		if cond.Operator != OpEquals || cond.Negate || cond.Path.IsEmpty() {
+			continue
+		}
+		field := cond.Path.Simple()
+		if !e.storage.HasIndex(listID, field) {
+			continue
+		}
+		matches, total, err := e.storage.IndexEstimate(ctx, listID, field, cond.Value)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, indexedCondition{
+			index: i, field: field, value: cond.Value,
+			matches: matches, total: total,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return nil, false, nil
+	}
+
+	// Try single-index scan: use the most selective candidate if it passes threshold
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.total > 0 && best.total > 0 &&
+			float64(c.matches)/float64(c.total) < float64(best.matches)/float64(best.total) {
+			best = c
+		}
+	}
+
+	if best.total > 0 && float64(best.matches)/float64(best.total) < indexSelectivityThreshold {
+		// Single index is selective enough
+		items, err := e.storage.IndexLookup(ctx, listID, best.field, best.value)
+		if err != nil {
+			return nil, false, nil
+		}
+		remaining := e.buildRemainingFilter(filterStage, best.index)
+		return items, true, remaining
+	}
+
+	// Try multi-index intersection if we have 2+ candidates
+	if len(candidates) >= 2 {
+		items, usedIdxs, ok := e.tryMultiIndexIntersection(ctx, listID, candidates)
+		if ok {
+			remaining := e.buildRemainingFilterMulti(filterStage, usedIdxs)
+			return items, true, remaining
+		}
+	}
+
+	return nil, false, nil
+}
+
+// tryMultiIndexIntersection intersects ID sets from multiple indexes.
+// Returns the fetched items, the condition indexes that were resolved, and success.
+func (e *Executor) tryMultiIndexIntersection(ctx context.Context, listID string, candidates []indexedCondition) ([]map[string]interface{}, []int, bool) {
+	if len(candidates) < 2 || candidates[0].total == 0 {
+		return nil, nil, false
+	}
+
+	// Get IDs from first candidate
+	ids, err := e.storage.IndexLookupIDs(ctx, listID, candidates[0].field, candidates[0].value)
+	if err != nil || len(ids) == 0 {
+		return nil, nil, false
+	}
+	usedIdxs := []int{candidates[0].index}
+
+	// Intersect with each subsequent candidate
+	for _, c := range candidates[1:] {
+		otherIDs, err := e.storage.IndexLookupIDs(ctx, listID, c.field, c.value)
+		if err != nil {
+			continue
+		}
+		ids = intersectSorted(ids, otherIDs)
+		usedIdxs = append(usedIdxs, c.index)
+		if len(ids) == 0 {
+			break
+		}
+	}
+
+	// Check if the intersection is selective enough
+	total := candidates[0].total
+	if float64(len(ids))/float64(total) >= indexSelectivityThreshold {
+		return nil, nil, false
+	}
+
+	// Fetch the intersected items
+	items, err := e.storage.FetchItemsByIDs(ctx, listID, ids)
+	if err != nil {
+		return nil, nil, false
+	}
+
+	return items, usedIdxs, true
+}
+
+// intersectSorted returns the intersection of two sorted string slices.
+func intersectSorted(a, b []string) []string {
+	var result []string
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if a[i] == b[j] {
+			result = append(result, a[i])
+			i++
+			j++
+		} else if a[i] < b[j] {
+			i++
+		} else {
+			j++
+		}
+	}
+	return result
+}
+
+// buildRemainingFilter creates a filter stage with one condition removed.
+func (e *Executor) buildRemainingFilter(stage *FilterStage, skipIdx int) Stage {
+	remaining := make([]FilterCondition, 0, len(stage.Conditions)-1)
+	for j, c := range stage.Conditions {
+		if j != skipIdx {
+			remaining = append(remaining, c)
+		}
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	return &FilterStage{Conditions: remaining, Logic: stage.Logic}
+}
+
+// buildRemainingFilterMulti creates a filter stage with multiple conditions removed.
+func (e *Executor) buildRemainingFilterMulti(stage *FilterStage, skipIdxs []int) Stage {
+	skip := make(map[int]bool, len(skipIdxs))
+	for _, idx := range skipIdxs {
+		skip[idx] = true
+	}
+	remaining := make([]FilterCondition, 0, len(stage.Conditions)-len(skipIdxs))
+	for j, c := range stage.Conditions {
+		if !skip[j] {
+			remaining = append(remaining, c)
+		}
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	return &FilterStage{Conditions: remaining, Logic: stage.Logic}
 }
 
 // executeStage executes a single stage
